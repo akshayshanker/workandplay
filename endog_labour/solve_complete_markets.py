@@ -115,7 +115,7 @@ if __name__ == '__main__':
 
 
 	# input markov matrix 
-	Gamma  =np.array([[0.746464, 0.252884, 0.000652, 0.000000, 0.000000, 0.000000,0.000000],
+	Gamma  = np.array([[0.746464, 0.252884, 0.000652, 0.000000, 0.000000, 0.000000,0.000000],
 			  [0.046088,  0.761085,  0.192512,  0.000314,  0.000000,  0.000000,  0.000000],
 			  [0.000028,  0.069422,  0.788612,  0.141793,  0.000145,  0.000000,  0.000000],
 			  [0.000000,  0.000065,  0.100953,  0.797965,  0.100953,  0.000065,  0.000000],
@@ -168,59 +168,3 @@ if __name__ == '__main__':
 	K = model.K_supply(np.array(sol[0:-1]))  
 
 	
-	"""
-
-	def Ptest(X):
-
-		#print("testing {}".format(X))
-		rho = X[0]
-		sigma = X[1]
-		A = X[2]
-
-		if rho >.6 and rho<.999 and sigma >.03 and sigma< .5 and A>.01 and A<3:
-			P_markov = tauchen(rho, sigma, n=7)
-
-			model = endog_labour_model(A=X[2], P =P_markov.P, P_stat = P_markov.stationary_distributions[0], e_shocks= np.exp(P_markov.state_values))
-
-
-			c_init = 2
-			b_init= np.ones(len(P_markov.state_values))
-
-			init = np.append(b_init,c_init)
-
-
-			sol = fsolve(model.system, init) 
-			H = np.inner(P_markov.stationary_distributions[0],1-model.labour(sol[-1]))      
-			L = model.L_supply(sol[-1])
-			Y = model.output(sol)
-
-			print("H= {}".format(H))
-			print("L = {}".format(L))
-			print("Y= {}".format(Y))
-			print("consumption ={}".format(sol[-1]))
-			
-			out =  np.max([(sol[-1]-.86)**2, (Y-1.09)**2,(H-.27)**2,(L-.34)**2])
-
-			if math.isnan(out):
-				return 100
-
-			else:
-				return out
-		else:
-			return np.inf
-
-  
-	rhos = np.linspace(.6, .9999, 10)
-	sigma = np.linspace(.05, .2, 10)
-	A = np.array([1, 1.5])
-
-	grid = cartesian([rhos, sigma, A])
-
-
-	p                           = ProcessPool()
-
-	errors= np.array(p.map(Ptest, grid))
-
-	x0 = grid[np.where(errors==np.min(errors))[0][0]]
-
-	minimize(Ptest, x0 ,tol = 1e-8, method = "Nelder-Mead") """
