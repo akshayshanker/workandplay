@@ -1,156 +1,136 @@
+"""
+Script solves incomplete market and constrained planner 
+problem for Aiyagari-Huggett model with endogenous 
+labour choice (Shanker and Wolfe, 2018)
+
+Model parameters loaded from pickle files
+saved in /Settings. 
+
+Script runs on single core python3/3.7.4
+
+Author: Akshay Shanker, University of New South Wales, Sydney
+		a.shanker@unsw.edu.au
+
+
+"""
 
 import numpy as np
-from scipy.optimize import minimize, brentq, root, fsolve
-import scipy.optimize as optimize
-from quantecon import MarkovChain
-import quantecon.markov as Markov
-import quantecon as qe
-from numba import jit, vectorize
-from pathos.pools import ProcessPool 
-import time
 import  dill as pickle
-from gini import gini
-import pdb 
-from sklearn.utils.extmath import cartesian 
-from numba import njit, prange
-from interpolation.splines import UCGrid, CGrid, nodes, eval_linear
-from interpolation import interp 
-from endog_labour import ConsumerProblem, FirmProblem, Operator_Factory
-
-import csv
-from numpy import genfromtxt
-
-
-
-
-# Input markov matrix from Pijoan-mas replication material 
-
-Gamma  =	np.array([[0.746464, 0.252884, 0.000652, 0.000000, 0.000000, 0.000000,0.000000],
-	     	[0.046088,  0.761085,  0.192512,  0.000314,  0.000000,  0.000000,  0.000000],
-	     	[0.000028,  0.069422,  0.788612,  0.141793,  0.000145,  0.000000,  0.000000],
-	     	[0.000000,  0.000065,  0.100953,  0.797965,  0.100953,  0.000065,  0.000000],
-	     	[0.000000,  0.000000,  0.000145,  0.141793,  0.788612,  0.069422,  0.000028],
-	     	[0.000000,  0.000000,  0.000000,  0.000314,  0.192512,  0.761085,  0.046088],
-	     	[0.000000,  0.000000,  0.000000,  0.000000,  0.000652,  0.252884,  0.746464]])
-
-Gamma_bar 	=	np.array([0.0154,   0.0847,    0.2349,    0.3300,    0.2349,    0.0847,    0.0154])
-
-e_shocks = np.array([np.exp(-1.385493),np.exp(-0.923662),np.exp(-0.461831),
-						np.exp(0.000000),
-						np.exp(0.461831),
-							np.exp(0.923662),
-					np.exp(1.385493)])
-
-e_shocks = e_shocks/np.dot(e_shocks, Gamma_bar)
-
-
-# Load the model parameter values from saved file 
-
-model = open('Settings/pjmas2.mod', 'rb')
-model_in = pickle.load(model)
-name = model_in["filename"]
-model.close()
-
-
-# Adjusted model parameters
+from pathlib import Path
+from scipy.optimize import brentq, fsolve
+from quantecon import MarkovChain
+import yaml
 
 from mpi4py import MPI as MPI4py
-world = MPI4py.COMM_WORLD
-
-index = int(world.Get_rank())
-array = genfromtxt('Settings/array.csv', delimiter=',')[1:]      
-parameters_array = np.array(array)
-parameters_array = cartesian([parameters_array[:,0], parameters_array[:,1]])
-parameters = parameters_array[index]
-
-model_in["gamma_c"] = parameters[0]
-model_in["gamma_l"] = parameters[1]
-
-name = name + '_array_' + str(index)
-
-# Initialise the consumer and firm class, load operators 
-
-cp = ConsumerProblem(Pi = Gamma,
-					z_vals = e_shocks,
-					gamma_c= model_in["gamma_c"],
-					gamma_l = model_in["gamma_l"],
-					A_L = model_in["A_L"],
-					grid_max = 65,
-					grid_size = 200,
-					beta = .945)
 
 
-fp = FirmProblem(delta = .083)
-
-compute_CEE, firstbest = Operator_Factory(cp, fp)
-
-#mc = MarkovChain(cp.Pi)
-#stationary_distributions = mc.stationary_distributions
-#mean = np.dot(stationary_distributions, cp.z_vals)
-#cp.z_vals = cp.z_vals/ mean   ## Standardise mean of avaible labour supply to 1
-
-
-
-# Create dictionary for saving results 
-
-Results = {}
-
-Results["Name of Model"] = "Pijoan_mas" + '_array_' + str(index)
-
-# Calcualte first best 
-
-fb_r, fb_K, fb_H, fb_L, fb_Y, fb_w  = firstbest()
-
-print('Running model {}, with grid_zize {}, max assets {}, T length of {},\
-		 prob matrix {}, z_vals {}, gamma_c {}, gamma_l{}'\
-		 .format(name, len(cp.asset_grid), np.max(cp.asset_grid), cp.T, cp.Pi,\
-		  cp.z_vals, cp.gamma_c, cp.gamma_l))
-
-print('First best output {}, capital {}, interest rate {},\
-		 hours {} and labour supply {}'.format(fb_Y, fb_K, fb_r, fb_H, fb_L))
-
-results_FB = dict( (name, eval(name)) for name in ['fb_Y', 'fb_K', 'fb_r',\
-													 'fb_w', 'fb_H', 'fb_L'])
-
-
-
-# Calcualte incomplete markets (IM), constrained planner (CP) and counter-factual (CF)
-results_IM, results_CP, results_CF = compute_CEE()
-
-Results['IM'] = results_IM
-Results['CP'] = results_CP
-Results['FB'] =	results_FB
-Results['CF'] = results_CF
-
-# Calculate Complete Markets
-
+from endog_labour_mpi import ConsumerProblem, FirmProblem, Operator_Factory
 from solve_complete_markets import endog_labour_model as complete_market_model
 
+if __name__ == "__main__":
+	world = MPI4py.COMM_WORLD
 
-model = complete_market_model(A=1.5, P =Gamma, P_stat = Gamma_bar, e_shocks= e_shocks)
+
+	# Define the path for settings and results for saving  and model name
+	name = 'pjmas'
+	results_path = "/scratch/kq62/endoglabour/results_09_Aug_2021/"
+
+	# set paths open model
+	settings_file = 'Settings/{}.yml'.format(name)
+	result_file_name = '{}.pickle'.format(name)
+
+	# Load the model parameter values from saved file 
 
 
-c_init = 2
-b_init= np.ones(len(e_shocks))
+	with open(settings_file) as fp:
+		model_in = yaml.load(fp)
 
-init = np.append(b_init,c_init)
 
-sol = fsolve(model.system, init) 
+	# Initialise the consumer and firm class, load solver 
 
-H = np.inner(Gamma_bar,1-model.labour(sol[-1]))      
-L = model.L_supply(sol[-1])
-Y = model.output(sol)
-K = model.K_supply(np.array(sol[0:-1]))  
-r,w,fk = fp.K_to_rw(K,L)
+	cp = ConsumerProblem(Pi = model_in["Pi"],
+						z_vals =  model_in["z_vals"],
+						gamma_c =  model_in["gamma_c"],
+						gamma_l = model_in["gamma_l"],
+						A_L = model_in["A_L"],
+						grid_max = 600,
+						grid_size = 1500,
+						beta = model_in["beta"])
 
-results_CM = {}
-results_CM['CM_K'] = K
-results_CM['CM_Y'] = Y
-results_CM['CM_L'] = L
-results_CM['CM_H'] = H
-results_CM['CM_r'] = r
+	fp = FirmProblem(delta = model_in["delta"],
+						AA =  model_in["AA"],
+						alpha =  model_in["alpha"])
 
-Results['CM'] = results_CM
+	#====Normalize mean of Labour distributuons===#
 
-# Save the results file
-pickle.dump(Results, open("/scratch/kq62/endoglabour/results_062021/results_PJmas_array_{}.mod".format(str(index)), "wb" ) )
+	mc = MarkovChain(cp.Pi)
+	stationary_distributions = mc.stationary_distributions
+	mean = np.dot(stationary_distributions, cp.z_vals)
+	cp.z_vals = cp.z_vals/ mean   ## Standardise mean of avaible labour supply to 1
+
+	compute_CEE, firstbest = Operator_Factory(cp, fp)
+
+
+	# Create dictionary for saving results 
+
+	Results = {}
+
+	Results["Name of Model"] = model_in["name"]
+
+	# Calcualte first best 
+
+	fb_r, fb_K, fb_H, fb_L, fb_Y, fb_w  = firstbest()
+
+	if world.rank == 0:
+		print('Running model {}, with grid_zize {}, max assets {}, T length of {},\
+				 prob matrix {}, z_vals {}, gamma_c {}, gamma_l{}'\
+				 .format(name, len(cp.asset_grid), np.max(cp.asset_grid), cp.T, cp.Pi,\
+				  cp.z_vals, cp.gamma_c, cp.gamma_l))
+
+		print('First best output {}, capital {}, interest rate {},\
+				 hours {} and labour supply {}'.format(fb_Y, fb_K, fb_r*100, fb_H, fb_L))
+
+	results_FB = dict( (name, eval(name)) for name in ['fb_Y', 'fb_K', 'fb_r',\
+														 'fb_w', 'fb_H', 'fb_L'])
+
+	# Calulate complete markets
+	mc = MarkovChain(cp.Pi)
+	P_stat = mc.stationary_distributions[0]
+	model = complete_market_model(A = fp.AA, delta = fp.delta, nu = cp.gamma_l, sigma = cp.gamma_c, beta = cp.beta, P = cp.Pi, P_stat = P_stat, e_shocks = cp.z_vals)
+
+	c_init = 2
+	b_init = np.ones(len(cp.z_vals))
+	init = np.append(b_init,c_init)
+
+	sol = fsolve(model.system, init) 
+
+	H = np.inner(P_stat,1-model.labour(sol[-1]))      
+	L = model.L_supply(sol[-1])
+	Y = model.output(sol)
+	K = model.K_supply(np.array(sol[0:-1]))  
+	r,w,fk = fp.K_to_rw(K,L)
+
+	results_CM = {}
+	results_CM['CM_K'] = K
+	results_CM['CM_Y'] = Y
+	results_CM['CM_L'] = L
+	results_CM['CM_H'] = H
+	results_CM['CM_r'] = r
+	Results['CM'] = results_CM
+	if world.rank == 0:
+		print(results_CM)
+
+
+	# Calcualte incomplete markets (IM), constrained planner (CP) 
+	# and counter-factual (CF)
+	results_IM, results_CP, results_CF = compute_CEE(world, 48)
+
+	# Collect results in results dictionary 
+	Results['IM'] = results_IM
+	Results['CP'] = results_CP
+	Results['FB'] =	results_FB
+	Results['CF'] = results_CF
+
+	# Save the results file
+	Path(results_path).mkdir(parents=True, exist_ok=True)
+	pickle.dump(Results, open('{}_results_{}'.format(results_path,result_file_name), "wb" ) )

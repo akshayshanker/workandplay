@@ -7,7 +7,7 @@ from quantecon import MarkovChain
 import quantecon.markov as Markov
 from tabulate import tabulate
 from gini import gini 
-
+import yaml
 
 import quantecon as qe
 from numba import jit, vectorize
@@ -27,53 +27,35 @@ import csv
 
 
 
-# input markov matrix from Pijoan-mas replication material 
-# store these inputs into a yml file
-Gamma  =	np.array([[0.746464, 0.252884, 0.000652, 0.000000, 0.000000, 0.000000,0.000000],
-	     	[0.046088,  0.761085,  0.192512,  0.000314,  0.000000,  0.000000,  0.000000],
-	     	[0.000028,  0.069422,  0.788612,  0.141793,  0.000145,  0.000000,  0.000000],
-	     	[0.000000,  0.000065,  0.100953,  0.797965,  0.100953,  0.000065,  0.000000],
-	     	[0.000000,  0.000000,  0.000145,  0.141793,  0.788612,  0.069422,  0.000028],
-	     	[0.000000,  0.000000,  0.000000,  0.000314,  0.192512,  0.761085,  0.046088],
-	     	[0.000000,  0.000000,  0.000000,  0.000000,  0.000652,  0.252884,  0.746464]])
-
-Gamma_bar 	=	np.array([0.0154,   0.0847,    0.2349,    0.3300,    0.2349,    0.0847,    0.0154])
-
-
-e_shocks = np.array([np.exp(-1.385493),np.exp(-0.923662),np.exp(-0.461831),
-			np.exp(0.000000),
-			np.exp(0.461831),
-			np.exp(0.923662),
-			np.exp(1.385493)])
-
-e_shocks = e_shocks/np.dot(e_shocks, Gamma_bar)
-
-
 # load the model parameter values from saved file 
+results_path = "/scratch/kq62/endoglabour/results_09_Aug_2021/"
+result_file_name = 'pjmas_high_gammac.pickle'
+settings_file = 'Settings/pjmas_high_gammac.yml'
 
-model = open('Settings/pjmas2.mod', 'rb')
-model_in = pickle.load(model)
-name = model_in["filename"]
-model.close()
+with open(settings_file) as fp:
+	model_in = yaml.load(fp)
+
+name = 'pjmas_low_gammac'
 
 # initialise the consumer and firm class, load operators 
 
-cp = ConsumerProblem(Pi = Gamma,
-					z_vals = e_shocks,
+cp = ConsumerProblem(Pi = model_in["Pi"],
+					z_vals = model_in["z_vals"],
 					gamma_c= model_in["gamma_c"],
 					gamma_l = model_in["gamma_l"],
 					A_L = model_in["A_L"],
 					grid_max = 65,
 					grid_size= 600,
-					beta = .945)
+					beta = model_in['beta'])
 
 
-fp = FirmProblem(delta = .083)
-
+fp = FirmProblem(delta = model_in["delta"])
+mc = MarkovChain(cp.Pi)
+P_stat = mc.stationary_distributions[0]
 
 
 import dill as pickle 
-Results = pickle.load(open('/scratch/kq62/endoglabour/results_062021/results_PJmas.mod', 'rb')) 
+Results = pickle.load(open('{}_results_{}'.format(results_path,result_file_name), "rb" ))
 
 Results["CP"]["CP_gini_a"] = gini(Results["CP"]["CP_a"])
 Results["CP"]["CP_gini_i"] = gini(Results["CP"]["CP_z_rlz"])
@@ -91,6 +73,7 @@ results_IM = Results['IM']
 results_CP = Results['CP'] 
 results_FB = Results['FB']
 results_CF = Results['CF']
+results_CM = Results['CM']
 
 
 results_CF["CF_w"] = results_CP["CP_w"]
@@ -98,51 +81,6 @@ results_CF["CF_r"] = results_CP["CP_r"]
 
 
 # Generate Complete Market results
-
-from solve_complete_markets import endog_labour_model as complete_market_model
-
-def A_zero(a):
-
-
-	model = complete_market_model(A=a, P =Gamma, P_stat = Gamma_bar, e_shocks= e_shocks)
-	# solving the model 
-	c_init = 2
-	b_init= np.ones(len(e_shocks))
-
-	init = np.append(b_init,c_init)
-
-	sol = fsolve(model.system, init) 
-	return model.L_supply(sol[-1])-.34
-	
-
-
-A = brentq(A_zero, .1, 3)
-
-model = complete_market_model(A=1.5, P =Gamma, P_stat = Gamma_bar, e_shocks= e_shocks)
-
-
-c_init = 2
-b_init= np.ones(len(e_shocks))
-
-init = np.append(b_init,c_init)
-
-sol = fsolve(model.system, init) 
-
-H = np.inner(Gamma_bar,1-model.labour(sol[-1]))      
-L = model.L_supply(sol[-1])
-Y = model.output(sol)
-K = model.K_supply(np.array(sol[0:-1]))  
-r,w,fk = fp.K_to_rw(K,L)
-
-results_CM = {}
-results_CM['CM_K'] = K
-results_CM['CM_Y'] = Y
-results_CM['CM_L'] = L
-results_CM['CM_H'] = H
-results_CM['CM_r'] = r
-
-
-
 
 for economy in ['IM', 'CP', 'CF']:
 	Results[economy][economy+'_policy_h'] = Results[economy][economy+'_policy'][0] 
@@ -304,8 +242,8 @@ restab.write(tabulate(table, headers = header,  tablefmt="latex_booktabs", float
 
 restab.close()
 
-caption = "Model parameters are $\beta$ = {}, $\alpha$ = {}, $\delta$ = {}, $\gamma_c$ = {}, $\gamma_l$ = {}, $A_L$ = {}, $A$ = {} and size of grid is {}".\
-            format(cp.beta, fp.alpha, fp.delta, cp.gamma_c, cp.gamma_l, cp.A_L, fp.AA, cp.grid_size)
+caption = "Model parameters are $\beta$ = {}, $\alpha$ = {}, $\delta$ = {}, $\gamma_c$ = {}, $\gamma_l$ = {}, $A_L$ = {}, $A$ = {}. Probability matrix: {}. Shocks: {}.".\
+            format(cp.beta, fp.alpha, fp.delta, cp.gamma_c, cp.gamma_l, cp.A_L, fp.AA, cp.Pi, cp.z_vals)
 
 print(caption)
 
@@ -358,8 +296,8 @@ import seaborn as sns
 #figmass.savefig("{}_hours_assets.pdf".format(name),
 #bbox_inches="tight")
 
-mean_hours_cp = np.empty(7)
-mean_hours_im = np.empty(7)
+mean_hours_cp = np.empty(len(cp.z_vals))
+mean_hours_im = np.empty(len(cp.z_vals))
 k = 0
 for i in np.unique(np.around(z_cp,2)):
     tmp_im = L_val_im[np.where(np.around(z_im,2) == i)]

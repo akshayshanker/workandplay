@@ -190,7 +190,7 @@ def Operator_Factory(cp, fp):
 
 	# tolerances
 
-	tol_brent = 10e-9
+	tol_brent = 10e-5
 	tol_bell = 10e-6
 	tol_cp = 1e-3
 	eta = 1
@@ -382,14 +382,11 @@ def Operator_Factory(cp, fp):
 		i=0
 		error = 1
 		while error> tol_bell and i<200:
-			#time_stat = time.time()
-			
+
 			Tv = bellman_operator(v, R, w, Lambda_E, Lambda_H, Pi, X_all,asset_grid, z_vals, return_policy=False)[2]
 			error = np.max(np.abs(Tv - v))
 			v = Tv
-			#print(error)
 			i+=1
-			#print(time.time()-time_stat)
 
 		policy = bellman_operator(v, R, w, Lambda_E, Lambda_H, Pi, X_all,asset_grid, z_vals, return_policy=True)
 		a = np.zeros(T)
@@ -431,26 +428,20 @@ def Operator_Factory(cp, fp):
 		"""
 		Function whose zero is the incomplete markets allocation. 
 		"""
-		#print(r)
 		R = 1+ r
 		w = r_to_w(r)
 		r_nil, w_nil, Lambda_supply, K_supply, L_supply, Hours, coefvar, a_nil, z_rlz_nil, h_val_nil, l_val_nil, policy_nil= compute_agg_prices(R, w, Lambda_E, Lambda_H, social= 0)
 		K_demand = r_to_K(r, L_supply)
-		excesssupply_K = K_supply- K_demand
-		#print(K_supply)
-		#print(K_demand)
+		excesssupply_K = K_supply - K_demand
 
 		return excesssupply_K
 
 	def firstbest():
-		#ststkfp.AA=alpha/((1/beta-1)+delta)
-		#fp.AA= 1.0/(ststkfp.AA**alpha *  L**(1.0-alpha)  )
-		##Get average productivity
+
 		mc = MarkovChain(Pi)
 		stationary_distributions = mc.stationary_distributions[0]
 		E = np.dot(stationary_distributions, z_vals)
 		def fbfoc(l):
-			#l = np.min([np.max([x,0.001]),.999])
 			L = E*(1-l)
 			K = L*(((1-beta +delta*beta)/(AA*alpha*beta))**(1/(alpha-1)))
 			Y = AA*(K**alpha)*(L**(1-alpha))
@@ -474,7 +465,10 @@ def Operator_Factory(cp, fp):
 		cap_lab_ratio = ((r+delta)/alpha)**(1/(alpha-1))
 		Lambda_E = -(Lambda_H*cap_lab_ratio/beta)
 
-		eqm_r_IM = brentq(Gamma_IM, - delta*.95, 2*(1-beta)/beta, args = (Lambda_E,Lambda_H), xtol = tol_brent)[0]
+		if Gamma_IM(- delta*.95, Lambda_E,Lambda_H)*Gamma_IM((1-beta)/beta, Lambda_E,Lambda_H)<0:
+			eqm_r_IM = brentq(Gamma_IM, - delta*.95, (1-beta)/beta, args = (Lambda_E,Lambda_H), xtol = tol_brent, disp= False)[0]
+		else:
+			eqm_r_IM = r
 
 		R = 1+ eqm_r_IM
 		w = r_to_w(eqm_r_IM)
@@ -482,63 +476,135 @@ def Operator_Factory(cp, fp):
 
 		return [CP_r,CP_w, CP_Lambda, CP_K, CP_L, CP_H, CP_coefvar, CP_a, CP_z_rlz, CP_h_val, CP_l_val, CP_policy]
 
-
 	#@njit
-	def compute_CEE():
-		eqm_r_IM = brentq(Gamma_IM, - delta*.95, 2*(1-beta)/beta, args = (0,0), xtol = tol_brent)[0]
-		R = 1+ eqm_r_IM
-		w = r_to_w(eqm_r_IM)
-		im_r, im_w, im_Lambda, im_K, im_L, im_H, im_coefvar, im_a, im_z_rlz, im_h_val, im_l_val, im_policy  = compute_agg_prices(R, w, 0, 0, social =1)
-		print('IM calculated interest rate {}, hours are {}, labour supply is {}, k_supply is {}'.format(im_r*100, im_H,im_L, im_K))
+	def compute_CEE(world, N_elite):
 
-		im_Y 	  = KL_to_Y(im_K, im_L)
-		im_gini_a = gini(im_a)
-		im_gini_i = gini(im_z_rlz)
+		if world.rank == 0:
+			print("Calc IM on all ranks")
 
-		IM_out   = [im_r, im_w, im_Lambda, im_K, im_L, im_H, im_coefvar, im_a, im_z_rlz, im_h_val, im_l_val, im_policy, im_Y, im_gini_a,im_gini_i]
+		else:
+			pass 
 
-		IM_list = 										 	['IM_r', 'IM_w', 'IM_Lambda',\
-															'IM_K', 'IM_L', 'IM_H',\
-															'IM_coefvar', 'IM_a', 'IM_z_rlz',\
-															'IM_h_val', 'IM_l_val', 'IM_policy',\
-															 'IM_Y', 'IM_gini_a', 'IM_gini_i']
+		#eqm_r_IM = brentq(Gamma_IM, - delta*.95, (1-beta)/beta, args = (0,0), xtol = tol_brent)[0]
+		#R = 1+ eqm_r_IM
+		##w = r_to_w(eqm_r_IM)
+		#im_r, im_w, im_Lambda, im_K, im_L, im_H, im_coefvar, im_a, im_z_rlz, im_h_val, im_l_val, im_policy  = compute_agg_prices(R, w, 0, 0, social =1)
+		#print('IM calculated interest rate {}, hours are {}, labour supply is {}, k_supply is {}'.format(im_r*100, im_H,im_L, im_K))
 
-		results_IM  = {}
+		#im_Y 	  = KL_to_Y(im_K, im_L)
+		#im_gini_a = gini(im_a)
+		#im_gini_i = gini(im_z_rlz)
 
-		for var, name in zip(IM_out,IM_list):
-			results_IM[name] = var
+		#IM_out   = [im_r, im_w, im_Lambda, im_K, im_L, im_H, im_coefvar, im_a, im_z_rlz, im_h_val, im_l_val, im_policy, im_Y, im_gini_a,im_gini_i]
 
+		#IM_list = 										 	['IM_r', 'IM_w', 'IM_Lambda',\
+		#													'IM_K', 'IM_L', 'IM_H',\
+		#													'IM_coefvar', 'IM_a', 'IM_z_rlz',\
+		#													'IM_h_val', 'IM_l_val', 'IM_policy',\
+		#													 'IM_Y', 'IM_gini_a', 'IM_gini_i']
+
+		#results_IM  = {}
+
+		#for var, name in zip(IM_out,IM_list):
+		#	results_IM[name] = var
+		
+		#if world.rank == 0:
+		#	print("Done IM on all ranks")
+		#else:
+		#	pass 
 
 		# set initial CP interest rate
-		r = 0.006612680218336248
+		#r = 0.006612680218336248
 		#r = eqm_r_IM
-		R = 1+r
-		w = r_to_w(r)
-		cap_lab_ratio = ((r+delta)/alpha)**(1/(alpha-1))
-		Lambda_H =im_Lambda
+		#R = 1+r
+		#w = r_to_w(r)
+		#cap_lab_ratio = ((r+delta)/alpha)**(1/(alpha-1))
+		#Lambda_H = im_Lambda
 
-		error =1
+		# set bounds on each cpu
+		r_bounds = [- delta*.95, (1-beta)/beta]
+		l_bounds = [-.01, .1]
+
+		# initial uniform draw
+		means_r = 0
+		means_l = 0
+		var_r = 0
+		var_l = 0 
+		mean_errors = 1
+		mean_errors_all =1
+
+		rstats = np.empty(2,  dtype='i')
+		lstats = np.empty(2,  dtype='i')
+		r = np.random.uniform(r_bounds[0], r_bounds[1])
+		Lambda_H = np.random.uniform(l_bounds[0], l_bounds[1])
+
+		mean_errors = 1
+
+		if world.rank == 0:
+			r_list_all = np.array([])
+			l_list_all = np.array([])
+			error_list_all = np.array([])
+
 		i = 0
-		while error> tol_cp:
-			out = Omega_CE(Lambda_H,r)
-			OLambda_H, Or = out[2], out[0]
-			error = np.max(np.abs([Lambda_H- OLambda_H, r- Or]))
-			print('Iteration {} of Omega, interest rate {}, Lambda_H {} and error1 {}'.format(i, Or, OLambda_H, error))
-			print('Iteration {} calculated interest rate {}, hours are {}, labour supply is {}, k_supply is {}'.format(i,out[0], out[5],out[4], out[3]))
-			Lambda_H = OLambda_H
-			r = Or
+
+		while mean_errors> 1e-015:
+			rstats = np.empty(3,  dtype = np.float64)
+			lstats = np.empty(3,  dtype = np.float64)
+			cap_lab_ratio = ((r+delta)/alpha)**(1/(alpha-1))
+			Lambda_E = - (Lambda_H*cap_lab_ratio/beta)
+			R = 1+ r
+			w = r_to_w(r)
+			CP_r,CP_w, CP_Lambda, CP_K, CP_L, CP_H, CP_coefvar, CP_a, CP_z_rlz, CP_h_val, CP_l_val, CP_policy = compute_agg_prices(R, w, Lambda_E, Lambda_H, social= 1)
+			K_demand = r_to_K(r, CP_L)
+			excesssupply_K = CP_K - K_demand
+			error = np.mean(np.abs([(Lambda_H -CP_Lambda)/Lambda_H, excesssupply_K/K_demand]))
+
+			if np.isnan(error) == True:
+				error = 1e100
+
+			# send to world 
+			world.Barrier()
+			indexed_errors = world.gather(error, root = 0)
+			parameter_r = world.gather(r, root = 0)
+			parameter_l = world.gather(Lambda_H, root = 0)
+			if world.rank == 0:
+
+				r_list_all = np.append(r_list_all, parameter_r)
+				l_list_all = np.append(l_list_all,parameter_l)
+				error_list_all = np.append(error_list_all,indexed_errors)
+
+				parameter_r_sorted = np.take(r_list_all, np.argsort(error_list_all))
+				parameter_l_sorted = np.take(l_list_all, np.argsort(error_list_all))
+				elite_errors = error_list_all[0: N_elite]
+				elite_r = parameter_r_sorted[0: N_elite]
+				elite_l = parameter_l_sorted[0: N_elite]
+
+				rstats = np.array([np.mean(elite_r), np.std(elite_r), np.std(parameter_r_sorted)],dtype=np.float64)
+				lstats = np.array([np.mean(elite_l), np.std(elite_l), np.std(parameter_l_sorted)],dtype=np.float64)
+				mean_errors_all = np.mean(elite_errors)
+				print('CE calculated iteration {}, interest rate {}, lambda  {}, error {} capital main {}'.format(i, rstats[0], lstats[0],mean_errors_all, CP_K))
+			else:
+				pass 
+
+			world.Barrier()
+			world.Bcast(rstats, root =0)
+			world.Bcast(lstats, root =0)
+			world.bcast(mean_errors_all, root =0)
+
+			eta_b = .7
+			r  = min((1-beta)/beta,max(- delta*.99,eta_b*np.random.normal(rstats[0], rstats[1]*eta_b + (1-eta_b)*rstats[2]) + (1-eta_b)*r))
+			Lambda_H = eta_b*np.random.normal(lstats[0], lstats[1]*eta_b + (1-eta_b)*lstats[2] ) + (1-eta_b)*Lambda_H
+			mean_errors =  (rstats[1] + lstats[1])/2
 			i +=1
 
-		print('CE calculated interest rate {}, hours are {}, labour supply is {}, k_supply is {}'.format(out[0], out[5],out[4], out[3]))
-
-		CP_Y 		= KL_to_Y(out[3], out[4])
-		CP_gini_a 	= gini(out[7])
-		CP_gini_i 	= gini(out[8])
+		CP_Y = KL_to_Y(out[3], out[4])
+		CP_gini_a = gini(out[7])
+		CP_gini_i = gini(out[8])
 		out.append([CP_Y,CP_gini_a,CP_gini_i])
 
 		results_CP = {}
 
-		CP_list = [		'CP_r','CP_w',\
+		CP_list = ['CP_r','CP_w',\
 						'CP_Lambda',\
 						'CP_K', 'CP_L',\
 						'CP_H', 'CP_coefvar',\
@@ -555,39 +621,30 @@ def Operator_Factory(cp, fp):
 		R = 1+ results_CP['CP_r']
 		w = r_to_w(r)
 
-
 		CF_r, CF_w, CF_Lambda, CF_K, CF_L, CF_H, CF_coefvar, CF_a, CF_z_rlz, CF_h_val, CF_l_val, CF_policy  = compute_agg_prices(R, w, 0, 0, social =1)
 		CF_out = [CF_r, CF_w, CF_Lambda, CF_K, CF_L, CF_H, CF_coefvar, CF_a, CF_z_rlz, CF_h_val, CF_l_val, CF_policy]
 		print('CF calculated interest rate {}, hours are {}, labour supply is {}, k_supply is {}'.format(CF_r*100, CF_H,CF_L, CF_K))
 
-
-		CF_Y 		= KL_to_Y(CF_out[3], CF_out[4])
-		CF_gini_a 	= gini(CF_out[7])
-		CF_gini_i 	= gini(CF_out[8])
+		CF_Y = KL_to_Y(CF_out[3], CF_out[4])
+		CF_gini_a = gini(CF_out[7])
+		CF_gini_i = gini(CF_out[8])
 		CF_out.append([CF_Y,CF_gini_a,CF_gini_i])
-
 		results_CF = {}
 
-		CF_list = [		'CF_r','CF_w',\
-						'CF_Lambda',\
-						'CF_K', 'CF_L',\
-						'CF_H', 'CF_coefvar',\
-						'CF_a', 'CF_z_rlz',\
-						'CF_h_val', 'CF_l_val',\
-						'CF_policy', 'CF_Y', \
-						'CF_gini_a', \
-						'CF_gini_i']
+		CF_list = ['CF_r','CF_w',\
+					'CF_Lambda',\
+					'CF_K', 'CF_L',\
+					'CF_H', 'CF_coefvar',\
+					'CF_a', 'CF_z_rlz',\
+					'CF_h_val', 'CF_l_val',\
+					'CF_policy', 'CF_Y', \
+					'CF_gini_a', \
+					'CF_gini_i']
 		
 		for var, name in zip(CF_out,CF_list) :
 			results_CF[name] = var
 
-
-		
-
-
-
-		return results_IM, results_CP, results_CF
-
+		return results_CP, results_CF
 
 	return compute_CEE, firstbest
 

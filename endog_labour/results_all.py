@@ -9,6 +9,7 @@ import matplotlib.cm as cm
 from numba import jit
 from endog_labour import ConsumerProblem, FirmProblem, Operator_Factory
 from statsmodels.nonparametric.smoothers_lowess import lowess
+import yaml
 
 
 def runres(namefilein, namefileout,model_path,T, mass=1):
@@ -37,45 +38,31 @@ def runres(namefilein, namefileout,model_path,T, mass=1):
 
     # load the model parameter values from saved file 
 
-    model = open('Settings/pjmas2.mod', 'rb')
-    model_in = pickle.load(model)
-    name = model_in["filename"]
-    model.close()
+
+    with open(model_path) as fp:
+        model_in = yaml.load(fp)
+
 
     # initialise the consumer and firm class, load operators 
+    CP = Results["CP"] 
+    CP_policy = CP["CP_policy"]
+    l_CP = CP_policy[1]
+    L_CP = (1 - l_CP)*100
+
+    
 
 
-    Gamma  =    np.array([[0.746464, 0.252884, 0.000652, 0.000000, 0.000000, 0.000000,0.000000],
-            [0.046088,  0.761085,  0.192512,  0.000314,  0.000000,  0.000000,  0.000000],
-            [0.000028,  0.069422,  0.788612,  0.141793,  0.000145,  0.000000,  0.000000],
-            [0.000000,  0.000065,  0.100953,  0.797965,  0.100953,  0.000065,  0.000000],
-            [0.000000,  0.000000,  0.000145,  0.141793,  0.788612,  0.069422,  0.000028],
-            [0.000000,  0.000000,  0.000000,  0.000314,  0.192512,  0.761085,  0.046088],
-            [0.000000,  0.000000,  0.000000,  0.000000,  0.000652,  0.252884,  0.746464]])
-
-    Gamma_bar   =   np.array([0.0154,   0.0847,    0.2349,    0.3300,    0.2349,    0.0847,    0.0154])
-
-
-    e_shocks = np.array([np.exp(-1.385493),np.exp(-0.923662),np.exp(-0.461831),
-            np.exp(0.000000),
-            np.exp(0.461831),
-            np.exp(0.923662),
-            np.exp(1.385493)])
-
-    e_shocks = e_shocks/np.dot(e_shocks, Gamma_bar)
-
-
-    cp = ConsumerProblem(Pi = Gamma,
-                        z_vals = e_shocks,
+    cp = ConsumerProblem(Pi = model_in["Pi"],
+                        z_vals = model_in["z_vals"],
                         gamma_c= model_in["gamma_c"],
                         gamma_l = model_in["gamma_l"],
                         A_L = model_in["A_L"],
-                        grid_max = 65,
-                        grid_size= 200,
-                        beta = .945)
+                        grid_max = 100,
+                        grid_size = len(np.array(L_CP[0,:])),
+                        beta = model_in["beta"])
+   # e_shocks = cp.z_vals
 
-
-    fp = FirmProblem(delta = .083)
+    fp = FirmProblem(delta = model_in["delta"], AA =model_in["AA"])
 
     #===unpack SP and IM results====#
 
@@ -137,7 +124,7 @@ def runres(namefilein, namefileout,model_path,T, mass=1):
     sns.set_color_codes("dark")
 
     titles = ['Low productivity (e = 0.22)','Medium productivity (e = 0.34)','High productivity (e = 0.54)']
-    y_vals = [[h_im[i,:],h_CP[i,:],h_CF[i,:]] for i in [0,3,6]]
+    y_vals = [[h_im[i,:],h_CP[i,:],h_CF[i,:]] for i in [0,1]]
 
     for ax, title, y in zip(ax_hpol.flat, titles, y_vals):
         ax.plot(cp.asset_grid[0:200], y[0][0:200], label = "IM", color = 'b', linewidth = .9)
@@ -180,7 +167,7 @@ def runres(namefilein, namefileout,model_path,T, mass=1):
     for ax, title, y in zip(ax_hpol.flat, titles, y_vals):
         ax.plot(cp.z_vals, y[0], label = "IM", color = 'b', linewidth = .9)
         ax.plot(cp.z_vals, y[1], label = "CP", color = 'r', ls = "dashed", linewidth = .9)
-        ax.plot(cp.z_vals, y[2], label = "IM with CP prices", color = 'g', ls = "dotted", linewidth = .9)
+        #ax.plot(cp.z_vals, y[2], label = "IM with CP prices", color = 'g', ls = "dotted", linewidth = .9)
         #ax.plot(cp.asset_grid[0:20], cp.asset_grid, ":", label = "45 deg. line", color = "k", linewidth = .5)
         ax.set_title(title, fontsize= 10)
         #ax.grid(True)
@@ -207,12 +194,12 @@ def runres(namefilein, namefileout,model_path,T, mass=1):
     sns.set_color_codes("dark")
     titles = ['Low productivity (e = 0.22)','Medium productivity (e = 0.34)','High productivity (e = 0.54)']
     #titles = ['e = {0:.2f}'.format(title_list[i]) for i in range(len(cp.z_vals))]
-    y_vals = [[L_imf(x,i),L_CPf(x,i),L_CFf(x,i)] for i in [0,3,6]]
+    y_vals = [[L_imf(x,i),L_CPf(x,i),L_CFf(x,i)] for i in [0,1]]
 
     for ax, title, y in zip(ax_lpol.flat, titles, y_vals):
         ax.plot(cp.asset_grid[0:200], y[0][0:200], label = "IM", color = 'b', linewidth = .9)
         ax.plot(cp.asset_grid[0:200], y[1][0:200], label = "CP", color = 'r', ls = "dashed", linewidth = .9)
-        ax.plot(cp.asset_grid[0:200], y[2][0:200], label = "IM with CP prices", color = 'g', ls = "dotted", linewidth = .9)
+        #ax.plot(cp.asset_grid[0:200], y[2][0:200], label = "IM with CP prices", color = 'g', ls = "dotted", linewidth = .9)
         #ax.plot(cp.asset_grid[0:20], cp.asset_grid, ":", label = "45 deg. line", color = "k", linewidth = .5)
         ax.set_title(title, fontsize= 10)
         #ax.grid(True)
@@ -378,41 +365,41 @@ def runres(namefilein, namefileout,model_path,T, mass=1):
         print('done_NUC')
 
         # IM asssets on assets 
-        KDEN_assets = Phi(a,a, cp.asset_grid)/(IM["IM_K"]*T)
-        KDEN_assets_aux = np.random.choice(cp.asset_grid, 100000, p=KDEN_assets)
-        density_k_assets = gaussian_kde(KDEN_assets_aux)
-        density_k_assets.covariance_factor = lambda : .2
-        density_k_assets._compute_covariance()
-        print('done_IM_a')
+        #KDEN_assets = Phi(a,a, cp.asset_grid)/(IM["IM_K"]*T)
+        #KDEN_assets_aux = np.random.choice(cp.asset_grid, 100000, p=KDEN_assets)
+        #density_k_assets = gaussian_kde(KDEN_assets_aux)
+        #density_k_assets.covariance_factor = lambda : .2
+        #density_k_assets._compute_covariance()
+        #print('done_IM_a')
 
         #IM hours on assets 
-        lDEN_assets = Phi(L_val,a, cp.asset_grid)/(IM["IM_H"]*T)
-        lDEN_assets_aux = np.random.choice(cp.asset_grid, 100000, p=lDEN_assets)
-        density_l_assets = gaussian_kde(lDEN_assets_aux)
-        density_l_assets.covariance_factor = lambda : .35
-        density_l_assets._compute_covariance()
-        print('done_IM')
-        density_p_assets = gaussian_kde(a)
-        density_p_assets.covariance_factor = lambda : .35
-        density_p_assets._compute_covariance()
+        #lDEN_assets = Phi(L_val,a, cp.asset_grid)/(IM["IM_H"]*T)
+        #lDEN_assets_aux = np.random.choice(cp.asset_grid, 100000, p=lDEN_assets)
+        #density_l_assets = gaussian_kde(lDEN_assets_aux)
+        #density_l_assets.covariance_factor = lambda : .35
+        #density_l_assets._compute_covariance()
+        #print('done_IM')
+        #density_p_assets = gaussian_kde(a)
+        #density_p_assets.covariance_factor = lambda : .35
+        #density_p_assets._compute_covariance()
 
         # CP asssets on assets 
-        KDEN_assets_cp = Phi(a_cp,a_cp, cp.asset_grid)/(CP["CP_K"]*T)
-        KDEN_assets_aux_cp = np.random.choice(cp.asset_grid, 100000, p=KDEN_assets_cp)
-        density_k_assets_cp = gaussian_kde(KDEN_assets_aux_cp)
-        density_k_assets_cp.covariance_factor = lambda : .2
-        density_k_assets_cp._compute_covariance()
+        #KDEN_assets_cp = Phi(a_cp,a_cp, cp.asset_grid)/(CP["CP_K"]*T)
+        #KDEN_assets_aux_cp = np.random.choice(cp.asset_grid, 100000, p=KDEN_assets_cp)
+        #density_k_assets_cp = gaussian_kde(KDEN_assets_aux_cp)
+        #density_k_assets_cp.covariance_factor = lambda : .2
+        #density_k_assets_cp._compute_covariance()
 
         # CP hours on assets 
-        lDEN_assets_cp = Phi(L_val_cp,a_cp, cp.asset_grid)/(CP["CP_H"]*T)
-        lDEN_assets_aux_cp = np.random.choice(cp.asset_grid, 100000, p=lDEN_assets_cp)
-        density_l_assets_cp = gaussian_kde(lDEN_assets_aux_cp)
-        density_l_assets_cp.covariance_factor = lambda : .25
-        density_l_assets_cp._compute_covariance()
+        #lDEN_assets_cp = Phi(L_val_cp,a_cp, cp.asset_grid)/(CP["CP_H"]*T)
+        #lDEN_assets_aux_cp = np.random.choice(cp.asset_grid, 100000, p=lDEN_assets_cp)
+        #density_l_assets_cp = gaussian_kde(lDEN_assets_aux_cp)
+        #density_l_assets_cp.covariance_factor = lambda : .25
+        #density_l_assets_cp._compute_covariance()
 
-        density_p_assets_cp = gaussian_kde(a_cp)
-        density_p_assets_cp.covariance_factor = lambda : .35
-        density_p_assets_cp._compute_covariance()
+        #density_p_assets_cp = gaussian_kde(a_cp)
+        #density_p_assets_cp.covariance_factor = lambda : .35
+        #density_p_assets_cp._compute_covariance()
 
         print(np.sum(EDEN))
 
@@ -465,7 +452,8 @@ def runres(namefilein, namefileout,model_path,T, mass=1):
         axmass.set_xlabel("Inverse of marginal utility of consumption")
         #figmass.suptitle("Equilibrium Asset and Labor Density", fontsize=12, x=0.55)
 
-        plt.xticks(np.arange(0, 3, step=1.5))
+        plt.xticks(np.arange(.7, 1, step=.2))
+        plt.xlim([.7, 1])
 
         sns.despine()
 
@@ -475,6 +463,7 @@ def runres(namefilein, namefileout,model_path,T, mass=1):
         figmass.savefig("{}_mass.pdf".format(name),
         bbox_inches="tight")
         #figmass.show()
+        """
         figmass_assets, axmass_assets = plt.subplots()
         axmass_assets.plot(cp.asset_grid, density_k_assets(cp.asset_grid), label = "Asset density (IM)", color = "k", ls= "dashed",linewidth=.8)
         axmass_assets.plot(cp.asset_grid, density_k_assets_cp(cp.asset_grid), label = "Asset density (CP)", color = "k", ls= "solid",linewidth=.8)
@@ -535,6 +524,7 @@ def runres(namefilein, namefileout,model_path,T, mass=1):
         axmass_assets.legend(loc=9, ncol=3,  bbox_to_anchor=(0.5, -0.2), frameon=False)
         figmass_assets.savefig("{}_mass_hours.pdf".format(name),
         bbox_inches="tight")
+        """
 
 
 
@@ -571,9 +561,11 @@ def runres(namefilein, namefileout,model_path,T, mass=1):
 
 if __name__ == "__main__":
 
-    results_path = "/scratch/kq62/endoglabour/results_062021/results_PJmas.mod"
-    results_path_out = "Results/"
-    model_path = 'Settings/pjmas2.mod'
+    results_path = "/scratch/kq62/endoglabour/results_09_Aug_2021/"
+    result_file_name = '_results_unemp.pickle'
+    results_path = results_path+ result_file_name
+    results_path_out = "Results/" + 'unemp'
+    model_path = 'Settings/unemp.yml'
 
-    EDEN2, KDEN2 = runres(results_path,results_path_out, model_path,1E7, mass = 0)
+    EDEN2, KDEN2 = runres(results_path,results_path_out, model_path,1E7, mass = 1)
 
