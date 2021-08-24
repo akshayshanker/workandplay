@@ -76,7 +76,7 @@ class ConsumerProblem:
 				 beta=.945, 
 				 Pi=((0.09, 0.91), (0.06, 0.94)),
 				 z_vals=(0.1, 1.0), 
-				 b= 1e-2, 
+				 b= 1e-10, 
 				 grid_max= 50, 
 				 grid_size= 100,
 				 gamma_c = 1.458,
@@ -105,7 +105,19 @@ class ConsumerProblem:
 		# Define functions 
 		@njit
 		def du(x):
-			return  np.power(x, -gamma_c) 
+			return  np.power(x, -gamma_c)
+
+		@njit
+		def du_inv(x):
+			return  np.power(x, -1/gamma_c) 
+
+		@njit
+		def dul(x):
+			return  A_L*np.power(x, - gamma_l) 
+
+		@njit
+		def dul_inv(x):
+			return  np.power((1/A_L)*x, - 1/gamma_l) 
 		
 		@njit
 		def u(x,l):
@@ -116,8 +128,9 @@ class ConsumerProblem:
 			return cons_u + lab_u
 		
 		self.u, self.du = u, du
+		self.dul, self.dul_inv, self.du_inv = dul, dul_inv, du_inv
 		self.z_seq = mc_sample_path(Pi, sample_size=T)
-		self.dul = lambda l: A_L*np.power(l, - gamma_l) 
+	
 
 class FirmProblem:
 	"""
@@ -191,7 +204,7 @@ def Operator_Factory(cp, fp):
 	# tolerances
 
 	tol_brent = 10e-5
-	tol_bell = 10e-6
+	tol_bell = 10e-8
 	tol_cp = 1e-3
 	eta = 1
 
@@ -224,6 +237,8 @@ def Operator_Factory(cp, fp):
 	z_seq = cp.z_seq
 	T = cp.T
 
+	dul, dul_inv, du_inv = cp.dul, cp.dul_inv, cp.du_inv
+
 	alpha, delta, AA = fp.alpha, fp.delta, fp.AA 
 	@njit
 	def initialize(R):
@@ -252,7 +267,7 @@ def Operator_Factory(cp, fp):
 			for i_z, z in enumerate(z_vals):
 				h_max = R * a + z + b
 				h[i_z, i_a] = 0
-				V[i_z, i_a] = u(h_max,.438) / (1 - beta)
+				V[i_z, i_a] = du(h_max/100)
 				c[i_z, i_a] = h_max
 
 		return V, h,c
@@ -352,6 +367,93 @@ def Operator_Factory(cp, fp):
 		return [new_h, new_l, new_V]
 
 
+	@njit
+	def coleman_operator(V,R, w, Lambda_E, Lambda_H, Pi, X_all,asset_grid,z_vals,  return_policy=False):
+		"""
+		The approximate Bellman operator, which computes and returns the
+		updated value function TV (or the V-greedy policy c if
+		return_policy is True).
+
+		Parameters
+		----------
+		V : array_like(float)
+			A NumPy array of dim len(cp.asset_grid) times len(cp.z_vals)
+		cp : ConsumerProblem
+			An instance of ConsumerProblem that stores primitives
+		return_policy : bool, optional(default=False)
+			Indicates whether to return the greed policy given V or the
+			updated value function TV.  Default is TV.
+
+		Returns
+		-------
+		array_like(float)
+			Returns either the greed policy given V or the updated value
+			function TV.
+
+		"""
+
+		# === Linear interpolation of V along the asset grid === #
+		#vf = lambda a, i_z: np.interp(a, asset_grid, V[:, i_z])
+
+		VC  = np.zeros(V.shape)
+		#Pi = np.ascontiguousarray(Pi)
+		
+		#Pi = np.ascontiguousarray(Pi)
+		# numpy dot sum product over last axis of matrix_A (t+1 continuation value unconditioned)
+		# see nunpy dot docs
+		for state in range(len(X_all)):
+			i_a = X_all[state][1]
+			i_z = X_all[state][0]
+			VC[i_z, i_a] = np.dot(Pi[i_z,:], V[:, i_a])
+		
+
+		# === Solve r.h.s. of Bellman equation === #
+		new_V = np.ascontiguousarray(np.zeros(V.shape))
+		new_h = np.ascontiguousarray(np.zeros(V.shape)) # next period capital 
+		new_l = np.ascontiguousarray(np.zeros(V.shape)) #lisure
+
+		curr_A = np.ascontiguousarray(np.zeros(V.shape))
+		curr_l = np.ascontiguousarray(np.zeros(V.shape))
+		curr_c = np.ascontiguousarray(np.zeros(V.shape))
+		
+		for state in range(len(X_all)):
+			a = asset_grid[X_all[state][1]]
+			i_a = X_all[state][1]
+
+			i_z = X_all[state][0]
+			z   = z_vals[i_z]
+			
+			c = du_inv(max(1e-200,(beta*VC[i_z,i_a]+ Lambda_H)))
+
+
+			l =  min(1, dul_inv( max(1e-200,du(c)*w*z + Lambda_E*z)))
+
+			curr_A[i_z, i_a] = min(asset_grid[-1], max(b, (c - w*(1-l)*z + a)/(R)))
+			curr_l[i_z, i_a] = l
+
+		curr_A = curr_A.ravel()
+		curr_l = curr_l.ravel()
+		curr_A[np.isnan(curr_A)] = b
+		curr_l[np.isnan(curr_l)] = b
+		curr_A = curr_A.reshape(len(z_vals),  len(asset_grid))
+		curr_l = curr_l.reshape(len(z_vals),  len(asset_grid))
+
+		#Interpolation step 
+		for i_z in range(len(z_vals)):
+			#print(curr_A[i_z, :])
+			curr_A[i_z, :] = np.sort(curr_A[i_z, :])
+			curr_l[i_z, :] = np.take(curr_l[i_z, :], np.argsort(curr_A[i_z, :]))
+			asset_grid_sorted = np.take(asset_grid, np.argsort(curr_A[i_z, :]))
+
+			new_h[i_z, :] = np.interp(asset_grid,curr_A[i_z, :],asset_grid_sorted)
+			#print(new_h[i_z, :])
+
+			new_l[i_z, :] = np.interp(asset_grid, curr_A[i_z, :],curr_l[i_z, :])
+			cons_array = (R)*asset_grid + w*z_vals[i_z]*(1-new_l[i_z, :]) - new_h[i_z, :]
+			cons_array[cons_array<=0] = 1e-10
+			new_V[i_z, :] = du(cons_array)
+	   
+		return [new_h, new_l, new_V]
 
 
 	@njit
@@ -378,17 +480,20 @@ def Operator_Factory(cp, fp):
 		# === Simplify names, set up arrays === #
 
 		v, h_init, c_init = initialize(R)
-		
+		h = h_init
 		i=0
 		error = 1
-		while error> tol_bell and i<200:
+		while error> tol_bell and i<500:
 
-			Tv = bellman_operator(v, R, w, Lambda_E, Lambda_H, Pi, X_all,asset_grid, z_vals, return_policy=False)[2]
-			error = np.max(np.abs(Tv - v))
-			v = Tv
+			policy = coleman_operator(v, R, w, Lambda_E, Lambda_H, Pi, X_all,asset_grid, z_vals, return_policy=False)
+			Th  = policy[0]
+			error = np.max(np.abs(Th - h))
+			v = policy[2]
+			h = Th
 			i+=1
+			#print(error)
 
-		policy = bellman_operator(v, R, w, Lambda_E, Lambda_H, Pi, X_all,asset_grid, z_vals, return_policy=True)
+		#policy = coleman_operator(v, R, w, Lambda_E, Lambda_H, Pi, X_all,asset_grid, z_vals, return_policy=True)
 		a = np.zeros(T)
 		a[0] = b*2
 
@@ -522,8 +627,8 @@ def Operator_Factory(cp, fp):
 		#Lambda_H = im_Lambda
 
 		# set bounds on each cpu
-		r_bounds = [- delta*.95, (1-beta)/beta]
-		l_bounds = [-.01, .1]
+		r_bounds = [.0001, .05]
+		l_bounds = [.001, .04]
 
 		# initial uniform draw
 		means_r = 0
@@ -567,22 +672,26 @@ def Operator_Factory(cp, fp):
 			indexed_errors = world.gather(error, root = 0)
 			parameter_r = world.gather(r, root = 0)
 			parameter_l = world.gather(Lambda_H, root = 0)
+			parameter_K = world.gather(CP_K, root = 0)
 			if world.rank == 0:
 
-				r_list_all = np.append(r_list_all, parameter_r)
-				l_list_all = np.append(l_list_all,parameter_l)
-				error_list_all = np.append(error_list_all,indexed_errors)
+				#r_list_all = np.append(r_list_all, parameter_r)
+				#l_list_all = np.append(l_list_all,parameter_l)
+				#error_list_all = np.append(error_list_all,indexed_errors)
 
-				parameter_r_sorted = np.take(r_list_all, np.argsort(error_list_all))
-				parameter_l_sorted = np.take(l_list_all, np.argsort(error_list_all))
-				elite_errors = error_list_all[0: N_elite]
+				parameter_r_sorted = np.take(parameter_r, np.argsort(indexed_errors))
+				parameter_l_sorted = np.take(parameter_l, np.argsort(indexed_errors))
+				parameter_K_sorted = np.take(parameter_K, np.argsort(indexed_errors))
+
+				elite_errors = indexed_errors[0: N_elite]
 				elite_r = parameter_r_sorted[0: N_elite]
 				elite_l = parameter_l_sorted[0: N_elite]
+				elite_K = parameter_K_sorted[0: N_elite]
 
 				rstats = np.array([np.mean(elite_r), np.std(elite_r), np.std(parameter_r_sorted)],dtype=np.float64)
 				lstats = np.array([np.mean(elite_l), np.std(elite_l), np.std(parameter_l_sorted)],dtype=np.float64)
 				mean_errors_all = np.mean(elite_errors)
-				print('CE calculated iteration {}, interest rate {}, lambda  {}, error {} capital main {}'.format(i, rstats[0], lstats[0],mean_errors_all, CP_K))
+				print('CE calculated iteration {}, interest rate {}, lambda  {}, error {} capital {}'.format(i, rstats[0], lstats[0],mean_errors_all, np.mean(elite_K)))
 			else:
 				pass 
 
