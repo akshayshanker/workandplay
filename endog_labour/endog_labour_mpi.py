@@ -760,7 +760,6 @@ def Operator_Factory(cp, fp):
 		# initial uniform draw
 		r = np.random.uniform(r_bounds[0], r_bounds[1])
 		Lambda_H = np.random.uniform(l_bounds[0], l_bounds[1])
-
 		
 		# Cross entropy 
 		while mean_errors> 1e-04:

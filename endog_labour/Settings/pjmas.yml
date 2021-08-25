@@ -56,6 +56,9 @@ delta: 0.083
 filename: pjmas2
 gamma_c: 1.458
 gamma_l: 2.883
+grid_max: 600
+grid_size: 5000
+N_elite: 24
 name: 'PJMAS Economy Calibrated to US data # 2'
 z_vals:
 - 0.21510594355648008

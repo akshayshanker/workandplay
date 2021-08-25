@@ -10,6 +10,9 @@ beta: 0.966
 delta: 0.083
 gamma_c: 5
 gamma_l: .5
+grid_max: 600
+grid_size: 5000
+N_elite: 24
 name: 'Unemployment Economy # 1'
 filename: unemp
 z_vals:

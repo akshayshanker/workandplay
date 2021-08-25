@@ -47,21 +47,21 @@ if __name__ == "__main__":
 
 
 	# Initialise the consumer and firm class, load solver 
-
+	print("Hello")
 	cp = ConsumerProblem(Pi = model_in["Pi"],
 						z_vals =  model_in["z_vals"],
 						gamma_c =  model_in["gamma_c"],
 						gamma_l = model_in["gamma_l"],
 						A_L = model_in["A_L"],
-						grid_max = 600,
-						grid_size = 2000,
+						grid_max = model_in["grid_max"],
+						grid_size = model_in["grid_size"],
 						beta = model_in["beta"])
 
 	fp = FirmProblem(delta = model_in["delta"],
 						AA =  model_in["AA"],
 						alpha =  model_in["alpha"])
 
-	#====Normalize mean of Labour distributuons===#
+	# Normalize mean of Labour distributuons 
 
 	mc = MarkovChain(cp.Pi)
 	stationary_distributions = mc.stationary_distributions
@@ -123,7 +123,7 @@ if __name__ == "__main__":
 
 	# Calcualte incomplete markets (IM), constrained planner (CP) 
 	# and counter-factual (CF)
-	results_IM, results_CP, results_CF = compute_CEE(world, 24)
+	results_IM, results_CP, results_CF = compute_CEE(world, model_in["N_elite"])
 
 	# Collect results in results dictionary 
 	Results['IM'] = results_IM
