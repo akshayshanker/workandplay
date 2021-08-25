@@ -1,0 +1,17 @@
+AA: 1.51
+A_L: 2
+Pi:
+- - 0.09
+  - 0.91
+- - 0.06
+  - 0.94
+alpha: 0.36
+beta: 0.966
+delta: 0.083
+gamma_c: 5
+gamma_l: .5
+name: 'Unemployment Economy # 1'
+filename: unemp
+z_vals:
+- 0.04361
+- 1.63934426
