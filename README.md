@@ -7,7 +7,7 @@ Package solves the incomplete market equilibrium and constrained optima for a Be
 
 main.py solves IM and CP using cingle core
 
-main_mpi.py solves IM and CP using cross entropy across multiple nodes. For example, to run using 420 nodes
+main_mpi.py solves IM and CP using cross entropy across multiple nodes. For example, to solve using N = 420 draws
 
 ``` mpiexec -n 420  python3 -m mpi4py main_mpi.py```
 
