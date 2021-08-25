@@ -202,11 +202,13 @@ class FirmProblem:
 def Operator_Factory(cp, fp):
 
 	# tolerances
-
-	tol_brent = 10e-5
-	tol_bell = 10e-8
+	tol_brent = 10e-9
+	tol_bell = 10e-6
 	tol_cp = 1e-3
 	eta = 1
+	max_iter_bell = 500
+	eta_b = .8
+	tol_contract = 1e-2
 
 
 	# Create the variables that remain constant through iteration 
@@ -240,6 +242,52 @@ def Operator_Factory(cp, fp):
 	dul, dul_inv, du_inv = cp.dul, cp.dul_inv, cp.du_inv
 
 	alpha, delta, AA = fp.alpha, fp.delta, fp.AA 
+
+
+	@njit
+	def interp_as(xp,yp,x, extrap = False):
+
+	    """Function  interpolates 1D
+	    with linear extraplolation 
+
+	    Parameters
+	    ----------
+	    xp : 1D array
+	          points of x values
+	    yp : 1D array
+	          points of y values
+	    x  : 1D array
+	          points to interpolate 
+
+	    Returns
+	    -------
+	    evals: 1D array  
+	            y values at x 
+
+	    """
+
+	    evals = np.zeros(len(x))
+	    if extrap == True and len(xp)>1:
+	        for i in range(len(x)):
+	            if x[i]< xp[0]:
+	                if (xp[1]-xp[0])!=0:
+	                    evals[i]= yp[0]+(x[i]-xp[0])*(yp[1]-yp[0])\
+	                        /(xp[1]-xp[0])
+	                else:
+	                    evals[i] = yp[0]
+
+	            elif x[i] > xp[-1]:
+	                if (xp[-1]-xp[-2])!=0:
+	                    evals[i]= yp[-1]+(x[i]-xp[-1])*(yp[-1]-yp[-2])\
+	                        /(xp[-1]-xp[-2])
+	                else:
+	                    evals[i] = yp[-1]
+	            else:
+	                evals[i]= np.interp(x[i],xp,yp)
+	    else:
+	        evals = np.interp(x,xp,yp)
+	    return evals
+
 	@njit
 	def initialize(R):
 		"""
@@ -333,26 +381,12 @@ def Operator_Factory(cp, fp):
 			i_z = X_all[state][0]
 			z   = z_vals[i_z]
 			
-			"""
-			bnds = ((b, cp.grid_max ),(0+1e-4,1- 1e-4))
-			cons = ({'type': 'ineq', 'fun': lambda x:  R * a + w*z*(1-x[1])-b -x[0]}, {'type': 'ineq', 'fun': lambda x: x[0]})
-			h0 = [b, .438]
-			#print(h0)
-			h_star = optimize.minimize(lambda x: -obj(x,  a, z, i_z, V\
-																	,R, w, Lambda_E, Lambda_H), h0, bounds = bnds,constraints=cons).x
-
-			"""
-
-			
 			bnds = np.array([[b, grid_max],[0+1e-4,1- 1e-4]])
 			h0 = np.array([b, .438])
 			args = (a, z, i_z, VC[i_z],R, w, Lambda_E, Lambda_H, asset_grid)
 			
 			h_star  = qe.optimize.nelder_mead(obj, h0, bounds = bnds, args = args)[0]
-			#h_star3= fminbound(obj, b, R * a + w*z + b)
-			#print(obj(h_star.x[0]), obj(h_star3))
-			
-			
+
 			if return_policy==True:
 				new_h[ i_z,i_a],new_l[i_z, i_a], new_V[i_z, i_a] = h_star[0],h_star[1], obj(h_star, a, z, i_z, VC[i_z]\
 																	,R, w, Lambda_E, Lambda_H, asset_grid)
@@ -368,69 +402,92 @@ def Operator_Factory(cp, fp):
 
 
 	@njit
-	def coleman_operator(V,R, w, Lambda_E, Lambda_H, Pi, X_all,asset_grid,z_vals,  return_policy=False):
+	def coleman_operator(V,\
+							R,\
+							w,\
+							Lambda_E,\
+							Lambda_H,\
+							Pi,\
+							X_all,\
+							asset_grid,\
+							z_vals,
+							return_policy=False):
 		"""
-		The approximate Bellman operator, which computes and returns the
-		updated value function TV (or the V-greedy policy c if
-		return_policy is True).
+		The EGM Coleman operator, computes and returns the
+		updated policy functions and next period MUC 
 
 		Parameters
 		----------
 		V : array_like(float)
-			A NumPy array of dim len(cp.asset_grid) times len(cp.z_vals)
-		cp : ConsumerProblem
-			An instance of ConsumerProblem that stores primitives
-		return_policy : bool, optional(default=False)
-			Indicates whether to return the greed policy given V or the
-			updated value function TV.  Default is TV.
+			A NumPy array of dim len(cp.z_vals) tines len(cp.asset_grid) 
+			Next period MUC
+		R : float64
+			Rate of return on assets
+		w : float64
+			Wage rate
+		Lambda_E: float64
+					Constrained planner's F_ll*Delta multipler 
+					(see WP (2018) and Shanker and Wolfe, 2021)
+		Lambda_H: float64
+					Constrained planner's - F_kk*Delta multipler
+		Pi: 2D array 
+			 Transition matrix for exogenous shocks 
+		X_all: 2D array
+				Cartesian product of shock and asset grid indices 
+		asset_grid: 1D array
+				asset grid 
+		z_vals : 1D array
+				 shock values 
 
 		Returns
 		-------
-		array_like(float)
-			Returns either the greed policy given V or the updated value
-			function TV.
+		new_h: 2D array 
+				Asset policy function 
+		new_l: 2D array
+				Leisure policy function 
+		new_V: 2D array
+				MUC
+
+		Note: The endogenous grid method is used.
 
 		"""
 
-		# === Linear interpolation of V along the asset grid === #
-		#vf = lambda a, i_z: np.interp(a, asset_grid, V[:, i_z])
-
+		# Condition the next period MUC to today's shock state 
 		VC  = np.zeros(V.shape)
-		#Pi = np.ascontiguousarray(Pi)
 		
-		#Pi = np.ascontiguousarray(Pi)
-		# numpy dot sum product over last axis of matrix_A (t+1 continuation value unconditioned)
-		# see nunpy dot docs
 		for state in range(len(X_all)):
 			i_a = X_all[state][1]
 			i_z = X_all[state][0]
 			VC[i_z, i_a] = np.dot(Pi[i_z,:], V[:, i_a])
 		
 
-		# === Solve r.h.s. of Bellman equation === #
-		new_V = np.ascontiguousarray(np.zeros(V.shape))
-		new_h = np.ascontiguousarray(np.zeros(V.shape)) # next period capital 
-		new_l = np.ascontiguousarray(np.zeros(V.shape)) #lisure
+		# Create empty arrays to fill for new policies 
+		new_V = np.zeros(V.shape)
+		new_h = np.zeros(V.shape) 
+		new_l = np.zeros(V.shape)
 
-		curr_A = np.ascontiguousarray(np.zeros(V.shape))
-		curr_l = np.ascontiguousarray(np.zeros(V.shape))
-		curr_c = np.ascontiguousarray(np.zeros(V.shape))
+		# Grids for policiesc conditioned on t+1 assets 
+		curr_A = np.zeros(V.shape)
+		curr_l = np.zeros(V.shape)
+		curr_c = np.zeros(V.shape)
 		
 		for state in range(len(X_all)):
+			
+			# Unpact state space values
+			# a in the loop is t + 1 assets 
 			a = asset_grid[X_all[state][1]]
 			i_a = X_all[state][1]
-
 			i_z = X_all[state][0]
 			z   = z_vals[i_z]
 			
-			c = du_inv(max(1e-200,(beta*VC[i_z,i_a]+ Lambda_H)))
-
-
-			l =  min(1, dul_inv( max(1e-200,du(c)*w*z + Lambda_E*z)))
-
-			curr_A[i_z, i_a] = min(asset_grid[-1], max(b, (c - w*(1-l)*z + a)/(R)))
+			# Consumption and leisure at t via inverting FOC 
+			c = du_inv(max(1e-200,(beta*R*VC[i_z,i_a] + Lambda_H)))
+			l =  min(1, dul_inv( max(1e-200,du(c)*w*z - Lambda_E*z)))
+			curr_A[i_z, i_a] = min(asset_grid[-1],\
+									 max(b, (c - w*(1-l)*z + a)/(R)))
 			curr_l[i_z, i_a] = l
 
+		# Replace any out of bound values with bound
 		curr_A = curr_A.ravel()
 		curr_l = curr_l.ravel()
 		curr_A[np.isnan(curr_A)] = b
@@ -438,30 +495,34 @@ def Operator_Factory(cp, fp):
 		curr_A = curr_A.reshape(len(z_vals),  len(asset_grid))
 		curr_l = curr_l.reshape(len(z_vals),  len(asset_grid))
 
-		#Interpolation step 
+		# Interpolate polcies on time t assets 
 		for i_z in range(len(z_vals)):
-			#print(curr_A[i_z, :])
+
 			curr_A[i_z, :] = np.sort(curr_A[i_z, :])
-			curr_l[i_z, :] = np.take(curr_l[i_z, :], np.argsort(curr_A[i_z, :]))
-			asset_grid_sorted = np.take(asset_grid, np.argsort(curr_A[i_z, :]))
+			curr_l[i_z, :] = np.take(curr_l[i_z, :],\
+									 np.argsort(curr_A[i_z, :]))
+			asset_grid_sorted = np.take(asset_grid,\
+									 np.argsort(curr_A[i_z, :]))
+			new_h[i_z, :] = interp_as(curr_A[i_z, :],\
+									asset_grid_sorted,asset_grid)
+			new_l[i_z, :] = interp_as(curr_A[i_z, :],\
+										curr_l[i_z, :], asset_grid)
+			
+			cons_array = R*asset_grid + w*z_vals[i_z]*(1-new_l[i_z, :])\
+							 - new_h[i_z, :]
 
-			new_h[i_z, :] = np.interp(asset_grid,curr_A[i_z, :],asset_grid_sorted)
-			#print(new_h[i_z, :])
-
-			new_l[i_z, :] = np.interp(asset_grid, curr_A[i_z, :],curr_l[i_z, :])
-			cons_array = (R)*asset_grid + w*z_vals[i_z]*(1-new_l[i_z, :]) - new_h[i_z, :]
-			cons_array[cons_array<=0] = 1e-10
+			cons_array[cons_array<=0] = b
 			new_V[i_z, :] = du(cons_array)
 	   
-		return [new_h, new_l, new_V]
+		return new_h, new_l, new_V
 
 
 	@njit
 	def series(T, a, h_val, l_val,z_rlz, z_seq, z_vals, hf,lf):
 		for t in range(T-1):
-			a[t+1] = interp(asset_grid, hf[z_seq[t]], a[t])
+			a[t+1] = np.interp(a[t],asset_grid, hf[z_seq[t]])
 			h_val[t] = a[t+1] #this can probably be vectorized 
-			l_val[t] = max([0,min([.9999999,interp(asset_grid, lf[z_seq[t]], a[t])])])
+			l_val[t] = max([0,min([.9999999,np.interp(a[t], asset_grid, lf[z_seq[t]])])])
 			z_rlz[t]= z_vals[z_seq[t]]*(1-l_val[t]) #this can probably be vectorized 
 	   
 		
@@ -477,19 +538,21 @@ def Operator_Factory(cp, fp):
 		behavior.  Parameter cp is an instance of consumerProblem
 		"""
 
-		# === Simplify names, set up arrays === #
-
 		v, h_init, c_init = initialize(R)
 		h = h_init
-		i=0
+		l = c_init
+		i = 0
 		error = 1
-		while error> tol_bell and i<500:
+		while error> tol_bell and i<max_iter_bell:
 
-			policy = coleman_operator(v, R, w, Lambda_E, Lambda_H, Pi, X_all,asset_grid, z_vals, return_policy=False)
-			Th  = policy[0]
-			error = np.max(np.abs(Th - h))
-			v = policy[2]
+			new_h, new_l, new_V = coleman_operator(v, R, w, Lambda_E, Lambda_H, Pi, X_all,asset_grid, z_vals, return_policy=False)
+			Th  = new_h
+			Tl = new_l
+			Tv = new_V
+			error = np.max(np.array([np.max(np.abs(Th - h)),np.max(np.abs(Tl - l)), np.max(np.abs(Tv - v))]))
+			v = new_V
 			h = Th
+			l = Tl
 			i+=1
 			#print(error)
 
@@ -500,14 +563,13 @@ def Operator_Factory(cp, fp):
 		z_rlz = np.zeros(T) #total labour supply after endogenous decisions. That is, e*(1-l)
 		h_val = np.zeros(T)
 		l_val = np.zeros(T) #liesure choice l! do NOT confuse with labour 
-		a, h_val, l_val, z_rlz = series(T, a, h_val,l_val, z_rlz, z_seq, z_vals, policy[0], policy[1])
-		return a, z_rlz, h_val, l_val, policy
+		a, h_val, l_val, z_rlz = series(T, a, h_val,l_val, z_rlz, z_seq, z_vals, new_h, new_l)
+		return a, z_rlz, h_val, l_val, [new_h, new_l, new_V]
 
 
 	@njit
 	def coef_var(a):
 		return np.sqrt(np.mean((a-np.mean(a))**2))/np.mean(a)
-
 
 
 	@njit
@@ -521,6 +583,8 @@ def Operator_Factory(cp, fp):
 		coefvar = coef_var(a)
 		r_f,w_f, fkk = K_to_rw(agg_K, L)
 		if social == 1:
+			c = a*(1+r_f) + w_f*z_rlz - h_val
+			c[c<=b] = b
 			Lambda = beta*agg_K*fkk*np.mean(\
 						du(a*(1+r_f) + w_f*z_rlz - h_val)*((a/agg_K) - (z_rlz/L))\
 						)
@@ -531,11 +595,17 @@ def Operator_Factory(cp, fp):
 	@njit
 	def Gamma_IM(r,Lambda_E,Lambda_H):
 		"""
+		Returns excess supply given r, and multipliers
+
+		Note
+		----
 		Function whose zero is the incomplete markets allocation. 
 		"""
 		R = 1+ r
 		w = r_to_w(r)
-		r_nil, w_nil, Lambda_supply, K_supply, L_supply, Hours, coefvar, a_nil, z_rlz_nil, h_val_nil, l_val_nil, policy_nil= compute_agg_prices(R, w, Lambda_E, Lambda_H, social= 0)
+		r_nil, w_nil, Lambda_supply, K_supply, L_supply, Hours, coefvar, \
+			a_nil, z_rlz_nil, h_val_nil, l_val_nil, policy_nil \
+				= compute_agg_prices(R, w, Lambda_E, Lambda_H, social= 0)
 		K_demand = r_to_K(r, L_supply)
 		excesssupply_K = K_supply - K_demand
 
@@ -552,7 +622,6 @@ def Operator_Factory(cp, fp):
 			Y = AA*(K**alpha)*(L**(1-alpha))
 			Fl = -E*AA*(1-alpha)*(K**alpha)*(L**(-alpha))
 			diff = du(Y - delta*K)*Fl + dul(l)
-			#print(cp.du(Y - fp.delta*K)*Fl )
 			return diff
 		
 		l = fsolve(fbfoc, .6)[0]
@@ -561,149 +630,227 @@ def Operator_Factory(cp, fp):
 		Hours = 1-l
 		K = L*(((1-beta +delta*beta)/(AA*alpha*beta))**(1/(alpha-1)))
 		Y = AA*np.power(K,alpha)*np.power(L,1-alpha)
-		#r = fp.AA*fp.alpha*np.power(K,fp.alpha-1)*np.power(L,1-fp.alpha)- fp.delta
 		r,w,fkk = K_to_rw(K, L)
 		return r, K, Hours,Labour_Supply, Y, w 
 
 	#@njit
 	def Omega_CE(Lambda_H,r):
+		"""
+		Computes IM for given Lambda_H and r
+
+		Parameters
+		----------
+		Lambda_H: float64
+		r: float64
+
+		Returns
+		-------
+		results: list 
+
+		Note
+		----
+
+		Results list containts:
+
+		CP_r: eqm. interest rate given Lambda_H and Lambda_E (given r)
+		CP_w: eqm. wage rate given Lambda_H and Lambda_E (given r)
+		CP_Lambda: eqm. Lambda_H calculated using eqm dist. 
+		CP_K: eqm. capital given Lambda_H and Lambda_E (given r)
+		CP_L: eqm. effective labour given Lambda_H and Lambda_E (given r)
+		CP_H: eqm. hours of work labour given Lambda_H and Lambda_E (given r)
+		CP_coefvar
+		CP_a: 
+		CP_z: 
+		CP_z_rlz: 
+		CP_h_val: 
+		CP_l_val: 
+		CP_policy
+
+		"""
 		cap_lab_ratio = ((r+delta)/alpha)**(1/(alpha-1))
 		Lambda_E = -(Lambda_H*cap_lab_ratio/beta)
 
-		if Gamma_IM(- delta*.95, Lambda_E,Lambda_H)*Gamma_IM((1-beta)/beta, Lambda_E,Lambda_H)<0:
-			eqm_r_IM = brentq(Gamma_IM, - delta*.95, (1-beta)/beta, args = (Lambda_E,Lambda_H), xtol = tol_brent, disp= False)[0]
+		if Gamma_IM(- delta*.99, Lambda_E,Lambda_H)\
+					*Gamma_IM((1-beta)/beta, Lambda_E,Lambda_H)<0:
+			eqm_r_IM = brentq(Gamma_IM, - delta*.99, (1-beta)/beta,\
+				 args = (Lambda_E,Lambda_H), xtol = tol_brent, disp= False)[0]
 		else:
 			eqm_r_IM = r
 
 		R = 1+ eqm_r_IM
 		w = r_to_w(eqm_r_IM)
-		CP_r,CP_w, CP_Lambda, CP_K, CP_L, CP_H, CP_coefvar, CP_a, CP_z_rlz, CP_h_val, CP_l_val, CP_policy = compute_agg_prices(R, w, Lambda_E, Lambda_H, social= 1)
+		CP_r,CP_w, CP_Lambda, CP_K, CP_L, CP_H, CP_coefvar, CP_a, CP_z_rlz,\
+			 CP_h_val, CP_l_val, CP_policy = compute_agg_prices(R, w, Lambda_E,\
+			 Lambda_H, social= 1)
 
-		return [CP_r,CP_w, CP_Lambda, CP_K, CP_L, CP_H, CP_coefvar, CP_a, CP_z_rlz, CP_h_val, CP_l_val, CP_policy]
+		return [CP_r,CP_w, CP_Lambda, CP_K, CP_L, CP_H, CP_coefvar,\
+							 CP_a, CP_z_rlz, CP_h_val, CP_l_val, CP_policy]
 
-	#@njit
 	def compute_CEE(world, N_elite):
+		""" Calculate IM and CP allocations
+
+		Parameters
+		----------
+		world: MPI Communicator class 
+				Class with MPI nodes to distribute cross entropy
+		N_elite: int
+				Number of elite draws
+
+		Returns
+		-------
+		Results_IM: dict
+		Results_CP: dict
+		Results_CE: dict
+
+		Note
+		----
+		world.rank>=N_elite
+		"""
 
 		if world.rank == 0:
-			print("Calc IM on all ranks")
+			print("Calculating IM on all ranks")
 
 		else:
 			pass 
 
-		#eqm_r_IM = brentq(Gamma_IM, - delta*.95, (1-beta)/beta, args = (0,0), xtol = tol_brent)[0]
-		#R = 1+ eqm_r_IM
-		##w = r_to_w(eqm_r_IM)
-		#im_r, im_w, im_Lambda, im_K, im_L, im_H, im_coefvar, im_a, im_z_rlz, im_h_val, im_l_val, im_policy  = compute_agg_prices(R, w, 0, 0, social =1)
-		#print('IM calculated interest rate {}, hours are {}, labour supply is {}, k_supply is {}'.format(im_r*100, im_H,im_L, im_K))
-
-		#im_Y 	  = KL_to_Y(im_K, im_L)
-		#im_gini_a = gini(im_a)
-		#im_gini_i = gini(im_z_rlz)
-
-		#IM_out   = [im_r, im_w, im_Lambda, im_K, im_L, im_H, im_coefvar, im_a, im_z_rlz, im_h_val, im_l_val, im_policy, im_Y, im_gini_a,im_gini_i]
-
-		#IM_list = 										 	['IM_r', 'IM_w', 'IM_Lambda',\
-		#													'IM_K', 'IM_L', 'IM_H',\
-		#													'IM_coefvar', 'IM_a', 'IM_z_rlz',\
-		#													'IM_h_val', 'IM_l_val', 'IM_policy',\
-		#													 'IM_Y', 'IM_gini_a', 'IM_gini_i']
-
-		#results_IM  = {}
-
-		#for var, name in zip(IM_out,IM_list):
-		#	results_IM[name] = var
+		# Calcuate IM on all ranks (probably inefficient)
+		eqm_r_IM = brentq(Gamma_IM, - delta*.99, (1-beta)/beta,\
+								 args = (0,0), xtol = tol_brent)[0]
+		R = 1+ eqm_r_IM
+		w = r_to_w(eqm_r_IM)
+		im_r, im_w, im_Lambda, im_K, im_L, im_H, im_coefvar, im_a,\
+			 im_z_rlz, im_h_val, im_l_val, im_policy \
+			  = compute_agg_prices(R, w, 0, 0, social =1)
 		
-		#if world.rank == 0:
-		#	print("Done IM on all ranks")
-		#else:
-		#	pass 
+		if world.rank == 0:
+			print('IM calculated interest rate {}, hours are {},\
+					labour supply is {}, k_supply is {}'.format(im_r*100,\
+					im_H,im_L, im_K))
 
-		# set initial CP interest rate
-		#r = 0.006612680218336248
-		#r = eqm_r_IM
-		#R = 1+r
-		#w = r_to_w(r)
-		#cap_lab_ratio = ((r+delta)/alpha)**(1/(alpha-1))
-		#Lambda_H = im_Lambda
+		im_Y = KL_to_Y(im_K, im_L)
+		im_gini_a = gini(im_a)
+		im_gini_i = gini(im_z_rlz)
+
+		IM_out   = [im_r, im_w, im_Lambda, im_K, im_L, im_H, im_coefvar,\
+					 im_a, im_z_rlz, im_h_val, im_l_val, im_policy, im_Y,\
+					 im_gini_a,im_gini_i]
+
+		IM_list = ['IM_r', 'IM_w', 'IM_Lambda',\
+					'IM_K', 'IM_L', 'IM_H',\
+					'IM_coefvar', 'IM_a', 'IM_z_rlz',\
+					'IM_h_val', 'IM_l_val', 'IM_policy',\
+					 'IM_Y', 'IM_gini_a', 'IM_gini_i']
+
+		results_IM  = {}
+
+		for var, name in zip(IM_out,IM_list):
+			results_IM[name] = var
+		
+		world.Barrier()
 
 		# set bounds on each cpu
-		r_bounds = [.0001, .05]
-		l_bounds = [.001, .04]
+		r_bounds = [- delta*.99, (1-beta)/beta]
+		l_bounds = [-.04, .04]
+
+		# Initialise empty variables (do we need this?)
+		i = 0
+		mean_errors = 1
+		mean_errors_all = 1
 
 		# initial uniform draw
-		means_r = 0
-		means_l = 0
-		var_r = 0
-		var_l = 0 
-		mean_errors = 1
-		mean_errors_all =1
-
-		rstats = np.empty(2,  dtype='i')
-		lstats = np.empty(2,  dtype='i')
 		r = np.random.uniform(r_bounds[0], r_bounds[1])
 		Lambda_H = np.random.uniform(l_bounds[0], l_bounds[1])
 
-		mean_errors = 1
+		
+		# Cross entropy 
+		while mean_errors> 1e-04:
 
-		if world.rank == 0:
-			r_list_all = np.array([])
-			l_list_all = np.array([])
-			error_list_all = np.array([])
-
-		i = 0
-
-		while mean_errors> 1e-015:
+			# Empty array to fill with next iter vals
 			rstats = np.empty(3,  dtype = np.float64)
 			lstats = np.empty(3,  dtype = np.float64)
-			cap_lab_ratio = ((r+delta)/alpha)**(1/(alpha-1))
-			Lambda_E = - (Lambda_H*cap_lab_ratio/beta)
+			cov_matrix = np.empty((2,2), dtype = np.float64)
+
+			# Calculate IM with r and Lambda_H draw 
 			R = 1+ r
 			w = r_to_w(r)
-			CP_r,CP_w, CP_Lambda, CP_K, CP_L, CP_H, CP_coefvar, CP_a, CP_z_rlz, CP_h_val, CP_l_val, CP_policy = compute_agg_prices(R, w, Lambda_E, Lambda_H, social= 1)
-			K_demand = r_to_K(r, CP_L)
-			excesssupply_K = CP_K - K_demand
-			error = np.mean(np.abs([(Lambda_H -CP_Lambda)/Lambda_H, excesssupply_K/K_demand]))
+			CP_r,CP_w, CP_Lambda, CP_K, CP_L, CP_H, CP_coefvar, CP_a,\
+			 CP_z_rlz, CP_h_val, CP_l_val, CP_policy = Omega_CE(Lambda_H,r)
+			
+			# Evaluate mean error 
+			error = np.mean(np.abs([(Lambda_H -CP_Lambda)/Lambda_H, (r-CP_r)/r]))
 
 			if np.isnan(error) == True:
 				error = 1e100
+				CP_Lambda  = im_Lambda
+				CP_r = im_r
 
-			# send to world 
+
 			world.Barrier()
-			indexed_errors = world.gather(error, root = 0)
-			parameter_r = world.gather(r, root = 0)
-			parameter_l = world.gather(Lambda_H, root = 0)
-			parameter_K = world.gather(CP_K, root = 0)
+
+			# If error is small, then iterate on new market values 
+			if mean_errors< tol_contract:
+				indexed_errors = world.gather(error, root = 0)
+				parameter_r = world.gather(CP_r, root = 0)
+				parameter_l = world.gather(CP_Lambda, root = 0)
+				parameter_K = world.gather(CP_K, root = 0)
+				parameter_H = world.gather(CP_H, root = 0)
+				parameter_L = world.gather(CP_L, root = 0)
+
+			else:
+				indexed_errors = world.gather(error, root = 0)
+				parameter_r = world.gather(r, root = 0)
+				parameter_l = world.gather(Lambda_H, root = 0)
+				parameter_K = world.gather(CP_K, root = 0)
+				parameter_H = world.gather(CP_H, root = 0)
+				parameter_L = world.gather(CP_L, root = 0)
+
+			# Send to world 
 			if world.rank == 0:
+				parameter_r_sorted = np.take(parameter_r,\
+										 np.argsort(indexed_errors))
+				parameter_l_sorted = np.take(parameter_l,\
+										 np.argsort(indexed_errors))
+				parameter_K_sorted = np.take(parameter_K,\
+										 np.argsort(indexed_errors))
+				parameter_H_sorted = np.take(parameter_H,\
+										 np.argsort(indexed_errors))
+				parameter_L_sorted = np.take(parameter_L,\
+										 np.argsort(indexed_errors))
+				indexed_errors_sorted = np.sort(indexed_errors)
 
-				#r_list_all = np.append(r_list_all, parameter_r)
-				#l_list_all = np.append(l_list_all,parameter_l)
-				#error_list_all = np.append(error_list_all,indexed_errors)
-
-				parameter_r_sorted = np.take(parameter_r, np.argsort(indexed_errors))
-				parameter_l_sorted = np.take(parameter_l, np.argsort(indexed_errors))
-				parameter_K_sorted = np.take(parameter_K, np.argsort(indexed_errors))
-
-				elite_errors = indexed_errors[0: N_elite]
+				elite_errors = indexed_errors_sorted[0: N_elite]
 				elite_r = parameter_r_sorted[0: N_elite]
 				elite_l = parameter_l_sorted[0: N_elite]
 				elite_K = parameter_K_sorted[0: N_elite]
 
-				rstats = np.array([np.mean(elite_r), np.std(elite_r), np.std(parameter_r_sorted)],dtype=np.float64)
-				lstats = np.array([np.mean(elite_l), np.std(elite_l), np.std(parameter_l_sorted)],dtype=np.float64)
+				elite_vec = np.stack((elite_r, elite_l))
+
+				cov_matrix = np.cov(elite_vec)
+				rstats = np.array([np.mean(elite_r), np.std(elite_r),\
+							 np.std(parameter_r_sorted)],dtype=np.float64)
+				lstats = np.array([np.mean(elite_l), np.std(elite_l),\
+							 np.std(parameter_l_sorted)],dtype=np.float64)
 				mean_errors_all = np.mean(elite_errors)
-				print('CE calculated iteration {}, interest rate {}, lambda  {}, error {} capital {}'.format(i, rstats[0], lstats[0],mean_errors_all, np.mean(elite_K)))
+				print('CE calculated iteration {}, interest rate {},\
+						 lambda  {}, error {} capital {} hours {} labour {}'\
+						 	.format(i, rstats[0], lstats[0],mean_errors_all,\
+						 	 np.mean(elite_K), np.mean(parameter_H_sorted),\
+						 	 np.mean(parameter_L_sorted)))
 			else:
 				pass 
 
 			world.Barrier()
 			world.Bcast(rstats, root =0)
 			world.Bcast(lstats, root =0)
+			world.Bcast(cov_matrix, root =0)
 			world.bcast(mean_errors_all, root =0)
 
-			eta_b = .7
-			r  = min((1-beta)/beta,max(- delta*.99,eta_b*np.random.normal(rstats[0], rstats[1]*eta_b + (1-eta_b)*rstats[2]) + (1-eta_b)*r))
-			Lambda_H = eta_b*np.random.normal(lstats[0], lstats[1]*eta_b + (1-eta_b)*lstats[2] ) + (1-eta_b)*Lambda_H
-			mean_errors =  (rstats[1] + lstats[1])/2
+			draws = np.random.multivariate_normal(np.array([rstats[0],\
+												 	lstats[0]]),\
+													cov_matrix)
+			r = eta_b*draws[0] + (1-eta_b)*r
+			Lambda_H = eta_b*draws[1]+ (1-eta_b)*Lambda_H
+			mean_errors =  mean_errors_all
 			i +=1
 
 		CP_Y = KL_to_Y(out[3], out[4])
@@ -730,9 +877,13 @@ def Operator_Factory(cp, fp):
 		R = 1+ results_CP['CP_r']
 		w = r_to_w(r)
 
-		CF_r, CF_w, CF_Lambda, CF_K, CF_L, CF_H, CF_coefvar, CF_a, CF_z_rlz, CF_h_val, CF_l_val, CF_policy  = compute_agg_prices(R, w, 0, 0, social =1)
-		CF_out = [CF_r, CF_w, CF_Lambda, CF_K, CF_L, CF_H, CF_coefvar, CF_a, CF_z_rlz, CF_h_val, CF_l_val, CF_policy]
-		print('CF calculated interest rate {}, hours are {}, labour supply is {}, k_supply is {}'.format(CF_r*100, CF_H,CF_L, CF_K))
+		CF_r, CF_w, CF_Lambda, CF_K, CF_L, CF_H, CF_coefvar, CF_a, CF_z_rlz,\
+		 CF_h_val, CF_l_val, CF_policy  = compute_agg_prices(R, w, 0, 0, social =1)
+		CF_out = [CF_r, CF_w, CF_Lambda, CF_K, CF_L, CF_H, CF_coefvar, CF_a,\
+		 CF_z_rlz, CF_h_val, CF_l_val, CF_policy]
+		
+		print('CF calculated interest rate {}, hours are {},\
+			 labour supply is {}, k_supply is {}'.format(CF_r*100, CF_H,CF_L, CF_K))
 
 		CF_Y = KL_to_Y(CF_out[3], CF_out[4])
 		CF_gini_a = gini(CF_out[7])
@@ -753,68 +904,7 @@ def Operator_Factory(cp, fp):
 		for var, name in zip(CF_out,CF_list) :
 			results_CF[name] = var
 
-		return results_CP, results_CF
+		return results_IM, results_CP, results_CF
 
 	return compute_CEE, firstbest
-
-
-if __name__ == "__main__":
-
-
-	# Shock matrix rom Pijoan-Mas
-	Gamma  = np.array([[0.746464, 0.252884, 0.000652, 0.000000, 0.000000, 0.000000,0.000000],
-		  [0.046088,  0.761085,  0.192512,  0.000314,  0.000000,  0.000000,  0.000000],
-		  [0.000028,  0.069422,  0.788612,  0.141793,  0.000145,  0.000000,  0.000000],
-		  [0.000000,  0.000065,  0.100953,  0.797965,  0.100953,  0.000065,  0.000000],
-		  [0.000000,  0.000000,  0.000145,  0.141793,  0.788612,  0.069422,  0.000028],
-		  [0.000000,  0.000000,  0.000000,  0.000314,  0.192512,  0.761085,  0.046088],
-		 [0.000000,  0.000000,  0.000000,  0.000000,  0.000652,  0.252884,  0.746464]])
-
-	# Stationary distribution
-	Gamma_bar = np.array([0.0154,   0.0847,    0.2349,    0.3300,    0.2349,    0.0847,    0.0154])
-
-
-	e_shocks = np.array([np.exp(-1.385493),np.exp(-0.923662),np.exp(-0.461831),
-						np.exp(0.000000),
-						np.exp(0.461831),
-						np.exp(0.923662),
-						np.exp(1.385493)])
-	
-	e_shocks = e_shocks/np.dot(e_shocks, Gamma_bar)
-
-
-	# Load the model file with parameter settings
-
-	model = open('pjmas2.mod', 'rb')
-	model_in = pickle.load(model)
-	name = model_in["filename"]
-	model.close()
-
-
-	cp = ConsumerProblem(Pi = Gamma,
-							z_vals = e_shocks,
-							gamma_c= model_in["gamma_c"],
-							gamma_l = model_in["gamma_l"],
-							A_L = model_in["A_L"],
-							grid_max = 60,
-							grid_size= 1000,
-							beta = .945)
-
-	fp = FirmProblem(delta = .083)
-
-	tol_brent = 10e-7
-	tol_bell = 10e-4
-	tol_cp = 4e-6
-	eta = 1
- 
-	compute_CEE, firstbest= Operator_Factory(cp, fp)
-
-	import time
-	R = 1.03
-	v, h_init, c_init = initialize(R)
-	w = r_to_w(R)
-	start = time.time()
-	bellman_operator(v, R, w, 0, 0, return_policy=False)
-	bellman_operator.parallel_diagnostics(level=4)
-	print(time.time()-start)
 

@@ -54,7 +54,7 @@ if __name__ == "__main__":
 						gamma_l = model_in["gamma_l"],
 						A_L = model_in["A_L"],
 						grid_max = 600,
-						grid_size = 1500,
+						grid_size = 2000,
 						beta = model_in["beta"])
 
 	fp = FirmProblem(delta = model_in["delta"],
@@ -123,7 +123,7 @@ if __name__ == "__main__":
 
 	# Calcualte incomplete markets (IM), constrained planner (CP) 
 	# and counter-factual (CF)
-	results_IM, results_CP, results_CF = compute_CEE(world, 48)
+	results_IM, results_CP, results_CF = compute_CEE(world, 24)
 
 	# Collect results in results dictionary 
 	Results['IM'] = results_IM
@@ -132,5 +132,6 @@ if __name__ == "__main__":
 	Results['CF'] = results_CF
 
 	# Save the results file
-	Path(results_path).mkdir(parents=True, exist_ok=True)
-	pickle.dump(Results, open('{}_results_{}'.format(results_path,result_file_name), "wb" ) )
+	if world.rank == 0:
+		Path(results_path).mkdir(parents=True, exist_ok=True)
+		pickle.dump(Results, open('{}_results_{}'.format(results_path,result_file_name), "wb" ) )
