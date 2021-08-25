@@ -1,7 +1,7 @@
 """
 Script solves incomplete market and constrained planner 
 problem for Aiyagari-Huggett model with endogenous 
-labour choice (Shanker and Wolfe, 2018)
+labour choice (Shanker and Wolfe, 2021)
 
 Model parameters loaded from pickle files
 saved in /Settings. 
@@ -39,14 +39,12 @@ if __name__ == "__main__":
 	settings_file = 'Settings/{}.yml'.format(name)
 	result_file_name = '{}.pickle'.format(name)
 
-	# Load the model parameter values from saved file 
-
+	# Load the model parameter values from saved file
 
 	with open(settings_file) as fp:
 		model_in = yaml.load(fp)
 
-
-	# Initialise the consumer and firm class, load solver 
+	# Initialise the consumer and firm class
 	print("Hello")
 	cp = ConsumerProblem(Pi = model_in["Pi"],
 						z_vals =  model_in["z_vals"],
@@ -61,12 +59,12 @@ if __name__ == "__main__":
 						AA =  model_in["AA"],
 						alpha =  model_in["alpha"])
 
-	# Normalize mean of Labour distributuons 
+	# Normalize mean of Labour distributuons to 1
 
 	mc = MarkovChain(cp.Pi)
 	stationary_distributions = mc.stationary_distributions
 	mean = np.dot(stationary_distributions, cp.z_vals)
-	cp.z_vals = cp.z_vals/ mean   ## Standardise mean of avaible labour supply to 1
+	cp.z_vals = cp.z_vals/ mean   
 
 	compute_CEE, firstbest = Operator_Factory(cp, fp)
 
@@ -94,9 +92,17 @@ if __name__ == "__main__":
 														 'fb_w', 'fb_H', 'fb_L'])
 
 	# Calulate complete markets
+
 	mc = MarkovChain(cp.Pi)
 	P_stat = mc.stationary_distributions[0]
-	model = complete_market_model(A = fp.AA, delta = fp.delta, nu = cp.gamma_l, sigma = cp.gamma_c, beta = cp.beta, P = cp.Pi, P_stat = P_stat, e_shocks = cp.z_vals)
+	model = complete_market_model(A = fp.AA,\
+									 delta = fp.delta,\
+									  nu = cp.gamma_l,\
+									  sigma = cp.gamma_c,\
+									  beta = cp.beta,\
+									   P = cp.Pi,\
+									   P_stat = P_stat,\
+									   e_shocks = cp.z_vals)
 
 	c_init = 2
 	b_init = np.ones(len(cp.z_vals))
@@ -134,4 +140,5 @@ if __name__ == "__main__":
 	# Save the results file
 	if world.rank == 0:
 		Path(results_path).mkdir(parents=True, exist_ok=True)
-		pickle.dump(Results, open('{}_results_{}'.format(results_path,result_file_name), "wb" ) )
+		pickle.dump(Results, open('{}_results_{}'\
+			.format(results_path,result_file_name), "wb" ) )
