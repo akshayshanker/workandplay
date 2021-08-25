@@ -1,7 +1,7 @@
 # Play for the Rich and Work for the Poor? 
 
 
-Replication material to solve for Shanker and Wolfe (2021): "Play for the Rich and Work for the Poor?Optimal Saving and Work Hours in the Heterogeneous Agents Neoclassical Growth Model", CEPR discussion paper DP16479(https://cepr.org/active/publications/discussion_papers/dp.php?dpno=16479)
+Replication material to solve for Shanker and Wolfe (2021): "Play for the Rich and Work for the Poor?Optimal Saving and Work Hours in the Heterogeneous Agents Neoclassical Growth Model" [CEPR discussion paper DP16479](https://cepr.org/active/publications/discussion_papers/dp.php?dpno=16479)
 
 Package solves the incomplete market equilibrium and constrained optima for a Bewley-Aiyagari-Huggett model with labour-leisure choice. 
 
