@@ -5,7 +5,7 @@ Replication material to solve for Shanker and Wolfe (2021): "Play for the Rich a
 
 Package solves the incomplete market equilibrium and constrained optima for a Bewley-Aiyagari-Huggett model with labour-leisure choice. The consumer problem is solved efficiently using the Endogenous Grid Method. 
 
-Preferred useage is X-entropy using MPI
+Preferred usage solves with X-entropy using MPI
 
 main_mpi.py solves IM and CP using cross entropy across multiple nodes. For example, to solve using N = 420 draws
 
