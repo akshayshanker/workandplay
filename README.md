@@ -11,7 +11,7 @@ main_mpi.py solves IM and CP using cross entropy across multiple nodes. For exam
 
 ``` mpiexec -n 420  python3 -m mpi4py main_mpi.py```
 
-Note number of elite draws for cross entropy specified as N_elite paramter in main_mpi.py script. 
+Note all parameter values (inc. grid sizes and number of elite draws for cross entropy etc.) specified in .yml files under /settings
 
 
 
