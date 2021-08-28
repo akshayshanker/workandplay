@@ -55,19 +55,26 @@ if __name__ == "__main__":
     with open(settings_file) as fp:
         model_in = yaml.load(fp)
 
-    # Initialise the consumer and firm class
-    cp = ConsumerProblem(Pi=model_in["Pi"],
-                         z_vals=model_in["z_vals"],
-                         gamma_c=model_in["gamma_c"],
-                         gamma_l=model_in["gamma_l"],
-                         A_L=model_in["A_L"],
-                         grid_max=model_in["grid_max"],
-                         grid_size=model_in["grid_size"],
-                         beta=model_in["beta"])
+    if world.rank == 0:
+        # Initialise the consumer and firm class
+        cp = ConsumerProblem(Pi=model_in["Pi"],
+                             z_vals=model_in["z_vals"],
+                             gamma_c=model_in["gamma_c"],
+                             gamma_l=model_in["gamma_l"],
+                             A_L=model_in["A_L"],
+                             grid_max=model_in["grid_max"],
+                             grid_size=model_in["grid_size"],
+                             beta=model_in["beta"])
 
-    fp = FirmProblem(delta=model_in["delta"],
-                     AA=model_in["AA"],
-                     alpha=model_in["alpha"])
+        fp = FirmProblem(delta=model_in["delta"],
+                         AA=model_in["AA"],
+                         alpha=model_in["alpha"])
+    else:
+        cp = None
+        fp = None
+
+    cp = world.bcast(cp, root =0 )
+    fp = world.bcast(fp, root =0 )
 
     # Normalize mean of Labour distributuons to 1
     mc = MarkovChain(cp.Pi)

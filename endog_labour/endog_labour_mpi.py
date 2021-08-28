@@ -25,6 +25,7 @@ Todo
 - Tidy Docstrings 
 - Does error in monte carlo draw of stationary distribution affect X-entropy
     convergence?
+- Vectorize evaluation of time series in series function 
 
 """
 import numpy as np
@@ -107,8 +108,6 @@ class ConsumerProblem:
         self.beta, self.b = beta, b
         self.Pi, self.z_vals = np.array(Pi), np.asarray(z_vals)
         self.asset_grid = np.linspace(b, grid_max, grid_size)
-        # used for explicit point finding
-        self.k = self.asset_grid[1] - self.asset_grid[0]
         self.gamma_c, self.gamma_l = gamma_c, gamma_l
         self.A_L = A_L
         self.T = T
@@ -117,20 +116,20 @@ class ConsumerProblem:
         self.grid_max = grid_max
         self.grid_size = grid_size
         self.X_all = cartesian(
-            [np.arange(len(z_vals)), np.arange(len(self.asset_grid))])
+            [np.arange(len(z_vals)), np.arange(len(self.asset_grid))]).astype(int)
 
         # Define functions
         @njit
         def du(x):
-            return np.power(x, -gamma_c)
+            return x**( -gamma_c)
 
         @njit
         def du_inv(x):
-            return np.power(x, -1 / gamma_c)
+            return x**( -1 / gamma_c)
 
         @njit
         def dul(x):
-            return A_L * np.power(x, - gamma_l)
+            return A_L * (x**( - gamma_l))
 
         @njit
         def dul_inv(x):
@@ -146,7 +145,7 @@ class ConsumerProblem:
 
         self.u, self.du = u, du
         self.dul, self.dul_inv, self.du_inv = dul, dul_inv, du_inv
-        self.z_seq = mc_sample_path(Pi, sample_size=T)
+        self.z_seq = mc_sample_path(Pi, sample_size=T).astype(int)
 
 
 class FirmProblem:
@@ -212,19 +211,18 @@ def Operator_Factory(cp, fp):
 
     # tolerances
     tol_brent = 10e-9
-    tol_bell = 10e-6
-    tol_cp = 1e-3
+    tol_bell = 10e-9
+    tol_cp = 1e-6
     eta = 1
-    max_iter_bell = 500
+    max_iter_bell = 1000
     max_iter_xe = 50
-    eta_b = .8
-    tol_contract = 1e-12
+    eta_b = 1
+    tol_contract = 1e-3
 
     # Create the variables that remain constant through iteration
 
     beta, b = cp.beta, cp.b
     asset_grid, z_vals, Pi = cp.asset_grid, cp.z_vals, cp.Pi
-    k = cp.k
     A_L, gamma_c, gamma_l = cp.A_L, cp.gamma_c, cp.gamma_l
 
     grid_max, grid_size = cp.grid_max, cp.grid_size
@@ -496,15 +494,15 @@ def Operator_Factory(cp, fp):
     @njit
     def series(T, a, h_val, l_val, z_rlz, z_seq, z_vals, hf, lf):
         for t in range(T - 1):
-            a[t + 1] = np.interp(a[t], asset_grid, hf[z_seq[t]])
+            a[t + 1] = max(b, np.interp(a[t], asset_grid, hf[z_seq[t]]))
             h_val[t] = a[t + 1]  # this can probably be vectorized
             l_val[t] = max(
-                [0, min([.9999999, np.interp(a[t], asset_grid, lf[z_seq[t]])])])
+                [0, min([1-1E-10, np.interp(a[t], asset_grid, lf[z_seq[t]])])])
             # this can probably be vectorized
             z_rlz[t] = z_vals[z_seq[t]] * (1 - l_val[t])
 
         l_val[T - 1] = max([0,
-                            min([.9999999,
+                            min([1-1E-10,
                                  interp(asset_grid,
                                         lf[z_seq[T - 1]],
                                         a[T - 1])])])
@@ -752,13 +750,15 @@ def Operator_Factory(cp, fp):
         r = np.random.uniform(r_bounds[0], r_bounds[1])
         Lambda_H = np.random.uniform(l_bounds[0], l_bounds[1])
 
-        # Cross entropy
-        while mean_errors > 1e-04 and i < max_iter_xe:
+        # Empty array to fill with next iter vals
+        rstats = np.empty(3, dtype=np.float64)
+        lstats = np.empty(3, dtype=np.float64)
+        cov_matrix = np.empty((2, 2), dtype=np.float64)
 
-            # Empty array to fill with next iter vals
-            rstats = np.empty(3, dtype=np.float64)
-            lstats = np.empty(3, dtype=np.float64)
-            cov_matrix = np.empty((2, 2), dtype=np.float64)
+        # Cross entropy
+        while mean_errors > tol_cp and i < max_iter_xe:
+
+
 
             # Calculate IM with r and Lambda_H draw
             R = 1 + r
@@ -766,9 +766,12 @@ def Operator_Factory(cp, fp):
             CP_r, CP_w, CP_Lambda, CP_K, CP_L, CP_H, CP_coefvar, CP_a,\
                 CP_z_rlz, CP_h_val, CP_l_val, CP_policy = Omega_CE(Lambda_H, r)
 
+            out = [CP_r, CP_w, CP_Lambda, CP_K, CP_L, CP_H, CP_coefvar, CP_a,\
+                CP_z_rlz, CP_h_val, CP_l_val, CP_policy]
+
             # Evaluate mean error
-            error = np.mean(
-                np.abs([(Lambda_H - CP_Lambda) / Lambda_H, (r - CP_r) / r]))
+            error = np.max(
+                np.abs([(Lambda_H - CP_Lambda), (r - CP_r)]))
 
             if np.isnan(error):
                 error = 1e100
@@ -794,19 +797,40 @@ def Operator_Factory(cp, fp):
                 parameter_H = world.gather(CP_H, root=0)
                 parameter_L = world.gather(CP_L, root=0)
 
-            # Send to world
+            # Process errors at master
             if world.rank == 0:
-                parameter_r_sorted = np.take(parameter_r,
-                                             np.argsort(indexed_errors))
-                parameter_l_sorted = np.take(parameter_l,
-                                             np.argsort(indexed_errors))
-                parameter_K_sorted = np.take(parameter_K,
-                                             np.argsort(indexed_errors))
-                parameter_H_sorted = np.take(parameter_H,
-                                             np.argsort(indexed_errors))
-                parameter_L_sorted = np.take(parameter_L,
-                                             np.argsort(indexed_errors))
-                indexed_errors_sorted = np.sort(indexed_errors)
+
+                # If i is the first iteration, create new sorted arrays of 
+                #  params and errors
+                #  else, append i-1 errors and params and sort
+                if i == 0:
+                    parameter_r_sorted = np.take(parameter_r,
+                                                 np.argsort(indexed_errors))
+                    parameter_l_sorted = np.take(parameter_l,
+                                                 np.argsort(indexed_errors))
+                    parameter_K_sorted = np.take(parameter_K,
+                                                 np.argsort(indexed_errors))
+                    parameter_H_sorted = np.take(parameter_H,
+                                                 np.argsort(indexed_errors))
+                    parameter_L_sorted = np.take(parameter_L,
+                                                 np.argsort(indexed_errors))
+                    indexed_errors_sorted = np.sort(indexed_errors)
+                else:
+                    indexed_errors     = np.append(indexed_errors_sorted, indexed_errors)
+
+                    parameter_r_sorted = np.take(np.append(parameter_r_sorted, parameter_r),\
+                                                        np.argsort(indexed_errors))
+                    
+                    parameter_l_sorted = np.take(np.append(parameter_l_sorted, parameter_l),\
+                                                        np.argsort(indexed_errors))
+                    parameter_K_sorted = np.take(np.append(parameter_K_sorted, parameter_K),\
+                                                        np.argsort(indexed_errors))
+                    parameter_H_sorted = np.take(np.append(parameter_H_sorted, parameter_H),\
+                                                        np.argsort(indexed_errors))
+                    parameter_L_sorted = np.take(np.append(parameter_L_sorted, parameter_L),\
+                                                        np.argsort(indexed_errors))
+                    indexed_errors_sorted = np.sort(indexed_errors)
+
 
                 elite_errors = indexed_errors_sorted[0: N_elite]
                 elite_r = parameter_r_sorted[0: N_elite]
@@ -815,15 +839,22 @@ def Operator_Factory(cp, fp):
 
                 elite_vec = np.stack((elite_r, elite_l))
 
-                cov_matrix = np.cov(elite_vec)
-                rstats = np.array([np.mean(elite_r), np.std(
+                cov_matrix_new = np.cov(elite_vec)
+                cov_matrix  = eta_b*cov_matrix_new + (1-eta_b)*cov_matrix
+
+                rstats_new = np.array([np.mean(elite_r), np.std(
                     elite_r), np.std(parameter_r_sorted)], dtype=np.float64)
-                lstats = np.array([np.mean(elite_l), np.std(
+                rstats = eta_b*rstats_new + (1-eta_b)*rstats
+
+                lstats_new = np.array([np.mean(elite_l), np.std(
                     elite_l), np.std(parameter_l_sorted)], dtype=np.float64)
+
+                lstats = eta_b*lstats_new + (1-eta_b)*lstats
+
                 mean_errors_all = np.mean(elite_errors)
                 print('CE X-entropy iteration {}, mean interest rate {},\
-						 mean lambda  {}, mean error {}, mean capital {},\
-                        mean hours {} mean  labour {}'
+                    mean lambda {}, mean error {}, mean capital {},\
+                    mean hours {}, mean labour {}'
                       .format(i, rstats[0], lstats[0], mean_errors_all,
                               np.mean(elite_K), np.mean(parameter_H_sorted),
                               np.mean(parameter_L_sorted)))
@@ -835,13 +866,13 @@ def Operator_Factory(cp, fp):
             world.Bcast(rstats, root=0)
             world.Bcast(lstats, root=0)
             world.Bcast(cov_matrix, root=0)
-            world.bcast(mean_errors_all, root=0)
+            mean_errors_all = world.bcast(mean_errors_all, root=0)
 
             draws = np.random.multivariate_normal(np.array([rstats[0],
                                                             lstats[0]]),
                                                   cov_matrix)
-            r = eta_b * draws[0] + (1 - eta_b) * r
-            Lambda_H = eta_b * draws[1] + (1 - eta_b) * Lambda_H
+            r = draws[0]
+            Lambda_H =  draws[1] 
             mean_errors = mean_errors_all
             i += 1
 
@@ -901,3 +932,4 @@ def Operator_Factory(cp, fp):
         return results_IM, results_CP, results_CF
 
     return compute_CEE, firstbest
+

@@ -53,10 +53,13 @@ Pi:
 alpha: 0.36
 beta: 0.945
 delta: 0.083
-filename: pjmas2
+filename: pjmas_low_gammac
 gamma_c: .5
 gamma_l: 2.883
-name: 'PJMAS Economy Calibrated to US data # 2'
+grid_max: 600
+grid_size: 5000
+N_elite: 24
+name: 'PJMAS Economy Calibrated to US data// lower gamma value'
 z_vals:
 - 0.21510594355648008
 - 0.3413682025045267
