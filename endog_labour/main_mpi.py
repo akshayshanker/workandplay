@@ -1,12 +1,12 @@
 """
-This script instanizes a parameterised consumer and firm problem based on 
+This script instanizes a parameterised consumer and firm problem
 
 The script then instantizes the equilibrium operators and 
 solves complete market, incomplete market and constrained planner
 problem for Aiyagari-Huggett model with endogenous
 labour choice (Shanker and Wolfe, 2021) from module `endog_labour_mpi`
 
-Model parameters loaded from yml file in /Settings
+Model parameters loaded from .yml file in /Settings
 
 Solution method based on parrallelised cross-entropy method. Number of cores
 will equal number of draws at each iteration of X-entropy. N_elite parameter
